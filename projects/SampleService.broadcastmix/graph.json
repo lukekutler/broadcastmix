@@ -1,0 +1,51 @@
+{
+  "name": "Sample Service",
+  "graph": {
+    "nodes": [
+      {"id": "band_group", "type": "GroupBus", "label": "Band Group", "inputs": 2, "outputs": 2},
+      {"id": "vocal_group", "type": "GroupBus", "label": "Vocal Group", "inputs": 2, "outputs": 2},
+      {"id": "communication_group", "type": "GroupBus", "label": "Comms Group", "inputs": 2, "outputs": 2},
+      {"id": "misc_group", "type": "GroupBus", "label": "Misc Group", "inputs": 2, "outputs": 2},
+      {"id": "broadcast_bus", "type": "BroadcastBus", "label": "Broadcast Bus", "inputs": 2, "outputs": 2},
+      {"id": "broadcast_output", "type": "Output", "label": "Broadcast Output", "inputs": 2, "outputs": 0},
+      {"id": "monitor_trim", "type": "Utility", "label": "Monitor Trim -3 dB", "inputs": 2, "outputs": 2},
+      {"id": "utility_channels", "type": "Utility", "label": "Utility Channels", "inputs": 2, "outputs": 2},
+      {"id": "monitor_bus", "type": "MixBus", "label": "Monitor Bus", "inputs": 2, "outputs": 2},
+      {"id": "monitor_output", "type": "Output", "label": "Monitor Output", "inputs": 2, "outputs": 0}
+    ],
+    "connections": [
+      {"from": "band_group", "fromChannel": 0, "to": "broadcast_bus", "toChannel": 0},
+      {"from": "band_group", "fromChannel": 1, "to": "broadcast_bus", "toChannel": 1},
+      {"from": "vocal_group", "fromChannel": 0, "to": "broadcast_bus", "toChannel": 0},
+      {"from": "vocal_group", "fromChannel": 1, "to": "broadcast_bus", "toChannel": 1},
+      {"from": "communication_group", "fromChannel": 0, "to": "broadcast_bus", "toChannel": 0},
+      {"from": "communication_group", "fromChannel": 1, "to": "broadcast_bus", "toChannel": 1},
+      {"from": "misc_group", "fromChannel": 0, "to": "broadcast_bus", "toChannel": 0},
+      {"from": "misc_group", "fromChannel": 1, "to": "broadcast_bus", "toChannel": 1},
+      {"from": "broadcast_bus", "fromChannel": 0, "to": "broadcast_output", "toChannel": 0},
+      {"from": "broadcast_bus", "fromChannel": 1, "to": "broadcast_output", "toChannel": 1},
+      {"from": "broadcast_bus", "fromChannel": 0, "to": "monitor_trim", "toChannel": 0},
+      {"from": "broadcast_bus", "fromChannel": 1, "to": "monitor_trim", "toChannel": 1},
+      {"from": "monitor_trim", "fromChannel": 0, "to": "monitor_bus", "toChannel": 0},
+      {"from": "monitor_trim", "fromChannel": 1, "to": "monitor_bus", "toChannel": 1},
+      {"from": "utility_channels", "fromChannel": 0, "to": "monitor_bus", "toChannel": 0},
+      {"from": "utility_channels", "fromChannel": 1, "to": "monitor_bus", "toChannel": 1},
+      {"from": "monitor_bus", "fromChannel": 0, "to": "monitor_output", "toChannel": 0},
+      {"from": "monitor_bus", "fromChannel": 1, "to": "monitor_output", "toChannel": 1}
+    ]
+  },
+  "layout": {
+    "macro": {
+      "band_group": {"x": 0.08, "y": 0.25},
+      "vocal_group": {"x": 0.08, "y": 0.5},
+      "communication_group": {"x": 0.08, "y": 0.7},
+      "misc_group": {"x": 0.08, "y": 0.85},
+      "broadcast_bus": {"x": 0.28, "y": 0.5},
+      "broadcast_output": {"x": 0.42, "y": 0.5},
+      "monitor_trim": {"x": 0.54, "y": 0.5},
+      "utility_channels": {"x": 0.66, "y": 0.3},
+      "monitor_bus": {"x": 0.78, "y": 0.5},
+      "monitor_output": {"x": 0.92, "y": 0.5}
+    }
+  }
+}
