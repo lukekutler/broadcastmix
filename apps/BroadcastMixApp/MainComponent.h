@@ -45,12 +45,14 @@ private:
     void switchToMicroView(const std::string& nodeId, const std::string& label, const core::Application::MicroViewDescriptor& descriptor);
     void updateBreadcrumbs();
     void navigateBack();
+    void navigateToBreadcrumbIndex(int index);
     ui::NodeGraphView::PositionOverrideMap buildOverrides(const std::unordered_map<std::string, persistence::LayoutPosition>& layout) const;
     [[nodiscard]] std::string labelForNode(const std::string& nodeId) const;
     [[nodiscard]] std::optional<core::Application::NodeTemplate> templateForLibraryId(const std::string& id) const;
     [[nodiscard]] bool isChannelNode(const std::string& nodeId) const;
     void refreshIoConfigPanel();
     void comboBoxChanged(juce::ComboBox* comboBox) override;
+    void refreshBreadcrumbBar();
 
     core::Application& app_;
     NodeGraphComponent graphComponent_;
@@ -59,6 +61,8 @@ private:
     juce::Label subtext_;
     juce::Label breadcrumbs_;
     juce::TextButton backButton_ { "Back" };
+    juce::Component breadcrumbBar_;
+    juce::OwnedArray<juce::TextButton> breadcrumbButtons_;
     juce::GroupComponent ioGroup_ { "ioGroup", "I/O Configuration" };
     juce::Label inputLabel_ { "inputLabel", "Input" };
     juce::ComboBox inputFormatBox_;
@@ -67,6 +71,7 @@ private:
     std::optional<MicroViewContext> currentMicro_;
     std::optional<std::string> selectedNode_;
     bool suppressIoEvents_ { false };
+    std::vector<std::pair<std::string, std::string>> breadcrumbStack_;
 };
 
 } // namespace broadcastmix::app

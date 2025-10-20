@@ -43,6 +43,8 @@ MainComponent::MainComponent(core::Application& app)
         navigateBack();
     };
     backButton_.setVisible(false);
+    breadcrumbs_.setVisible(false);
+    breadcrumbBar_.setInterceptsMouseClicks(true, true);
 
     addAndMakeVisible(headline_);
     addAndMakeVisible(subtext_);
@@ -55,6 +57,7 @@ MainComponent::MainComponent(core::Application& app)
     addAndMakeVisible(inputFormatBox_);
     addAndMakeVisible(outputLabel_);
     addAndMakeVisible(outputFormatBox_);
+    addAndMakeVisible(breadcrumbBar_);
 
     ioGroup_.setVisible(false);
     inputLabel_.setVisible(false);
@@ -99,11 +102,9 @@ void MainComponent::resized() {
     subtext_.setBounds(headerArea.removeFromTop(24));
     headerArea.removeFromTop(6);
 
-    auto breadcrumbArea = headerArea.removeFromTop(24);
-    const auto backButtonWidth = 80;
-    auto backArea = breadcrumbArea.removeFromLeft(backButtonWidth);
-    backButton_.setBounds(backArea);
-    breadcrumbs_.setBounds(breadcrumbArea);
+    auto breadcrumbArea = headerArea.removeFromTop(28);
+    breadcrumbBar_.setBounds(breadcrumbArea);
+    refreshBreadcrumbBar();
 
     area.removeFromTop(12);
     const int idealLibraryWidth = juce::jlimit(200, 260, area.getWidth() / 3);
@@ -248,7 +249,8 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
         return;
     }
 
-    const std::string effectiveLabel = !label.empty() ? label : labelForNode(effectiveNodeId);
+    std::string effectiveLabel = label;
+    const std::string parentId = currentMicro_ ? currentMicro_->id : std::string{};
 
     if (currentMicro_ && currentMicro_->id == effectiveNodeId) {
         currentMicro_->label = effectiveLabel;
@@ -264,6 +266,12 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
         currentMicro_->view->setPositionOverrides(buildOverrides(descriptor.layout));
         currentMicro_->view->setTopology(descriptor.topology);
     }
+
+    if (parentId.empty()) {
+        breadcrumbStack_.clear();
+    }
+
+    breadcrumbStack_.emplace_back(effectiveNodeId, effectiveLabel);
 
     graphComponent_.setGraphView(currentMicro_->view.get());
     graphComponent_.setNodeDragHandler([this, effectiveNodeId](const std::string& childNode, float normX, float normY) {
@@ -334,10 +342,8 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
     const bool outputExists = descriptor.topology && descriptor.topology->findNode(channelOutputId).has_value();
 
     audio::GraphNodeType macroType = audio::GraphNodeType::Utility;
-    if (const auto topology = app_.graphTopology()) {
-        if (const auto macroNode = topology->findNode(effectiveNodeId)) {
-            macroType = macroNode->type();
-        }
+    if (const auto nodeType = app_.nodeTypeForId(effectiveNodeId)) {
+        macroType = *nodeType;
     }
 
     std::optional<std::string> fixedInput;
@@ -349,6 +355,36 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
     if ((macroType == audio::GraphNodeType::Channel || macroType == audio::GraphNodeType::GroupBus || macroType == audio::GraphNodeType::Output) && outputExists) {
         fixedOutput = channelOutputId;
     }
+
+    const auto resolvedLabel = labelForNode(effectiveNodeId);
+    currentMicro_->label = resolvedLabel;
+
+    if (parentId.empty()) {
+        breadcrumbStack_.clear();
+    } else {
+        const auto parentIt = std::find_if(breadcrumbStack_.begin(), breadcrumbStack_.end(), [&](const auto& entry) {
+            return entry.first == parentId;
+        });
+        if (parentIt != breadcrumbStack_.end()) {
+            breadcrumbStack_.erase(std::next(parentIt), breadcrumbStack_.end());
+        } else {
+            breadcrumbStack_.clear();
+            breadcrumbStack_.emplace_back(parentId, labelForNode(parentId));
+        }
+    }
+
+    const auto existing = std::find_if(breadcrumbStack_.begin(), breadcrumbStack_.end(), [&](const auto& entry) {
+        return entry.first == effectiveNodeId;
+    });
+
+    if (existing == breadcrumbStack_.end()) {
+        breadcrumbStack_.emplace_back(effectiveNodeId, resolvedLabel);
+    } else {
+        existing->second = resolvedLabel;
+        breadcrumbStack_.erase(std::next(existing), breadcrumbStack_.end());
+    }
+
+    effectiveLabel = resolvedLabel;
 
     std::cout << "[MainComponent] switchToMicroView node='";
     for (char c : effectiveNodeId) {
@@ -381,6 +417,7 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
 void MainComponent::switchToMacroView() {
     currentMicro_.reset();
     std::cout << "[MainComponent] switchToMacroView" << std::endl;
+    breadcrumbStack_.clear();
     graphComponent_.setGraphView(&app_.nodeGraphView());
     graphComponent_.setNodeDragHandler([this](const std::string& nodeId, float normX, float normY) {
         app_.updateMacroNodePosition(nodeId, normX, normY);
@@ -432,27 +469,85 @@ void MainComponent::switchToMacroView() {
 }
 
 void MainComponent::updateBreadcrumbs() {
-    std::ostringstream stream;
-    stream << "Macro";
-    if (currentMicro_) {
-        stream << " > " << currentMicro_->label;
-    }
-    breadcrumbs_.setText(stream.str(), juce::dontSendNotification);
-    backButton_.setVisible(currentMicro_.has_value());
+    refreshBreadcrumbBar();
 }
 
 void MainComponent::navigateBack() {
-    if (!currentMicro_) {
+    if (breadcrumbStack_.empty()) {
+        switchToMacroView();
         return;
     }
+
+    const int targetIndex = static_cast<int>(breadcrumbStack_.size()) - 1;
+    navigateToBreadcrumbIndex(targetIndex);
+}
+
+void MainComponent::navigateToBreadcrumbIndex(int index) {
+    if (index <= 0) {
+        switchToMacroView();
+        return;
+    }
+
+    const auto clampedIndex = std::min(index, static_cast<int>(breadcrumbStack_.size()));
+
     switchToMacroView();
+
+    std::vector<std::pair<std::string, std::string>> path;
+    path.reserve(static_cast<std::size_t>(clampedIndex));
+
+    for (int i = 0; i < clampedIndex; ++i) {
+        const auto& entry = breadcrumbStack_[static_cast<std::size_t>(i)];
+        auto descriptor = app_.microViewDescriptor(entry.first);
+        switchToMicroView(entry.first, entry.second, descriptor);
+    }
+}
+
+void MainComponent::refreshBreadcrumbBar() {
+    breadcrumbs_.setVisible(false);
+    backButton_.setVisible(false);
+
+    for (auto* button : breadcrumbButtons_) {
+        breadcrumbBar_.removeChildComponent(button);
+    }
+    breadcrumbButtons_.clear();
+
+    std::vector<std::pair<std::string, std::string>> path;
+    path.insert(path.end(), breadcrumbStack_.begin(), breadcrumbStack_.end());
+    path.insert(path.begin(), std::make_pair(std::string(), "Home"));
+
+    auto bounds = breadcrumbBar_.getLocalBounds();
+    const int height = bounds.getHeight();
+    const int spacing = 8;
+    int x = 0;
+
+    const auto& theme = app_.nodeGraphView().theme();
+    auto pillColour = toColour(theme.accent).withAlpha(0.2F);
+    auto pillColourPressed = toColour(theme.accent).withAlpha(0.4F);
+    auto textColour = toColour(theme.textPrimary);
+
+    for (int i = 0; i < static_cast<int>(path.size()); ++i) {
+        auto* button = breadcrumbButtons_.add(new juce::TextButton(path[static_cast<std::size_t>(i)].second));
+        button->setClickingTogglesState(false);
+        button->setColour(juce::TextButton::buttonColourId, pillColour);
+        button->setColour(juce::TextButton::buttonOnColourId, pillColourPressed);
+        button->setColour(juce::TextButton::textColourOffId, textColour);
+        button->setColour(juce::TextButton::textColourOnId, textColour);
+        button->onClick = [this, index = i]() { navigateToBreadcrumbIndex(index); };
+        const auto font = button->getLookAndFeel().getTextButtonFont(*button, height);
+        juce::GlyphArrangement glyph;
+        glyph.addLineOfText(font, button->getButtonText(), 0.0F, 0.0F);
+        const int width = std::max(70, static_cast<int>(glyph.getBoundingBox(0, -1, true).getWidth() + 24.0F));
+        button->setBounds(x, 0, width, height);
+        button->setConnectedEdges(juce::TextButton::ConnectedOnLeft | juce::TextButton::ConnectedOnRight);
+        breadcrumbBar_.addAndMakeVisible(button);
+        x += width + spacing;
+    }
 }
 
 void MainComponent::refreshIoConfigPanel() {
     suppressIoEvents_ = true;
 
-    const bool inMicroView = currentMicro_.has_value();
-    if (!selectedNode_ || inMicroView) {
+    const auto hidePanel = [&]() {
         ioGroup_.setVisible(false);
         inputLabel_.setVisible(false);
         inputFormatBox_.setVisible(false);
@@ -460,45 +555,30 @@ void MainComponent::refreshIoConfigPanel() {
         outputFormatBox_.setVisible(false);
         suppressIoEvents_ = false;
         resized();
+    };
+
+    if (!selectedNode_) {
+        hidePanel();
         return;
     }
 
-    const auto topology = app_.graphTopology();
-    if (!topology) {
-        ioGroup_.setVisible(false);
-        inputLabel_.setVisible(false);
-        inputFormatBox_.setVisible(false);
-        outputLabel_.setVisible(false);
-        outputFormatBox_.setVisible(false);
-        suppressIoEvents_ = false;
-        resized();
+    const auto nodeTypeOpt = app_.nodeTypeForId(*selectedNode_);
+    if (!nodeTypeOpt) {
+        hidePanel();
         return;
     }
 
-    const auto nodeOpt = topology->findNode(*selectedNode_);
-    if (!nodeOpt) {
-        ioGroup_.setVisible(false);
-        inputLabel_.setVisible(false);
-        inputFormatBox_.setVisible(false);
-        outputLabel_.setVisible(false);
-        outputFormatBox_.setVisible(false);
-        suppressIoEvents_ = false;
-        resized();
+    const auto nodeInfo = app_.nodeForId(*selectedNode_);
+    if (!nodeInfo) {
+        hidePanel();
         return;
     }
 
-    const auto nodeType = nodeOpt->type();
+    const auto nodeType = *nodeTypeOpt;
     const bool isChannel = nodeType == audio::GraphNodeType::Channel;
     const bool isOutput = nodeType == audio::GraphNodeType::Output;
-
     if (!isChannel && !isOutput) {
-        ioGroup_.setVisible(false);
-        inputLabel_.setVisible(false);
-        inputFormatBox_.setVisible(false);
-        outputLabel_.setVisible(false);
-        outputFormatBox_.setVisible(false);
-        suppressIoEvents_ = false;
-        resized();
+        hidePanel();
         return;
     }
 
@@ -517,12 +597,12 @@ void MainComponent::refreshIoConfigPanel() {
     if (isChannel) {
         inputLabel_.setVisible(true);
         inputFormatBox_.setVisible(true);
-        configureCombo(inputFormatBox_, std::max<std::uint32_t>(1U, nodeOpt->inputChannelCount()));
-        configureCombo(outputFormatBox_, std::max<std::uint32_t>(1U, nodeOpt->outputChannelCount()));
+        configureCombo(inputFormatBox_, std::max<std::uint32_t>(1U, nodeInfo->inputChannelCount()));
+        configureCombo(outputFormatBox_, std::max<std::uint32_t>(1U, nodeInfo->outputChannelCount()));
     } else {
         inputLabel_.setVisible(false);
         inputFormatBox_.setVisible(false);
-        configureCombo(outputFormatBox_, std::max<std::uint32_t>(1U, nodeOpt->inputChannelCount()));
+        configureCombo(outputFormatBox_, std::max<std::uint32_t>(1U, nodeInfo->inputChannelCount()));
     }
 
     suppressIoEvents_ = false;
@@ -539,6 +619,12 @@ ui::NodeGraphView::PositionOverrideMap MainComponent::buildOverrides(const std::
 }
 
 std::string MainComponent::labelForNode(const std::string& nodeId) const {
+    if (const auto nodeOpt = app_.nodeForId(nodeId)) {
+        if (!nodeOpt->label().empty()) {
+            return nodeOpt->label();
+        }
+    }
+
     const auto findLabel = [&](const auto& nodes) -> std::optional<std::string> {
         if (nodes.empty()) {
             return std::nullopt;
@@ -602,27 +688,23 @@ void MainComponent::comboBoxChanged(juce::ComboBox* comboBox) {
         return;
     }
 
-    if (!comboBox || !selectedNode_ || currentMicro_) {
+    if (!comboBox || !selectedNode_) {
         return;
     }
 
-    const auto topology = app_.graphTopology();
-    if (!topology) {
+    const auto nodeTypeOpt = app_.nodeTypeForId(*selectedNode_);
+    const auto nodeInfo = app_.nodeForId(*selectedNode_);
+    if (!nodeTypeOpt || !nodeInfo) {
         return;
     }
 
-    const auto nodeOpt = topology->findNode(*selectedNode_);
-    if (!nodeOpt) {
-        return;
-    }
-
-    const auto nodeType = nodeOpt->type();
+    const auto nodeType = *nodeTypeOpt;
     if (nodeType != audio::GraphNodeType::Channel && nodeType != audio::GraphNodeType::Output) {
         return;
     }
 
-    std::uint32_t desiredInputChannels = nodeOpt->inputChannelCount();
-    std::uint32_t desiredOutputChannels = nodeOpt->outputChannelCount();
+    std::uint32_t desiredInputChannels = nodeInfo->inputChannelCount();
+    std::uint32_t desiredOutputChannels = nodeInfo->outputChannelCount();
 
     if (comboBox == &inputFormatBox_) {
         const auto selectedId = inputFormatBox_.getSelectedId();

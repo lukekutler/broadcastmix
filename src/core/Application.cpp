@@ -3,6 +3,8 @@
 #include "Logging.h"
 
 #include <algorithm>
+#include <array>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -86,6 +88,44 @@ audio::AudioEngineStatus Application::audioStatus() const {
     return audioEngine_.status();
 }
 
+std::optional<audio::GraphNodeType> Application::nodeTypeForId(const std::string& nodeId) const {
+    if (currentProject_.graphTopology) {
+        if (const auto macroNode = currentProject_.graphTopology->findNode(nodeId)) {
+            return macroNode->type();
+        }
+    }
+
+    for (const auto& [viewId, state] : currentProject_.microViews) {
+        if (!state.topology) {
+            continue;
+        }
+        if (const auto microNode = state.topology->findNode(nodeId)) {
+            return microNode->type();
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::optional<audio::GraphNode> Application::nodeForId(const std::string& nodeId) const {
+    if (currentProject_.graphTopology) {
+        if (const auto macroNode = currentProject_.graphTopology->findNode(nodeId)) {
+            return macroNode;
+        }
+    }
+
+    for (const auto& [viewId, state] : currentProject_.microViews) {
+        if (!state.topology) {
+            continue;
+        }
+        if (const auto microNode = state.topology->findNode(nodeId)) {
+            return microNode;
+        }
+    }
+
+    return std::nullopt;
+}
+
 audio::AudioEngineSettings Application::audioSettings() const {
     return audioEngine_.settings();
 }
@@ -130,6 +170,9 @@ std::array<float, 2> Application::meterLevelForNode(const std::string& nodeId) c
 
 std::array<float, 2> Application::meterLevelForMicroNode(const std::string& viewId, const std::string& nodeId) const {
     (void) viewId;
+    if (const auto it = meterAliases_.find(nodeId); it != meterAliases_.end()) {
+        return audioEngine_.meterLevelsForNode(it->second);
+    }
     return audioEngine_.meterLevelsForNode(nodeId);
 }
 
@@ -151,12 +194,7 @@ Application::MicroViewDescriptor Application::ensureMicroView(const std::string&
     auto& entry = currentProject_.microViews[viewId];
     const bool created = !entry.topology;
     if (created) {
-        audio::GraphNodeType nodeType = audio::GraphNodeType::GroupBus;
-        if (currentProject_.graphTopology) {
-            if (const auto macroNode = currentProject_.graphTopology->findNode(viewId)) {
-                nodeType = macroNode->type();
-            }
-        }
+        audio::GraphNodeType nodeType = resolveNodeType(viewId);
 
         switch (nodeType) {
         case audio::GraphNodeType::Channel:
@@ -168,6 +206,10 @@ Application::MicroViewDescriptor Application::ensureMicroView(const std::string&
         case audio::GraphNodeType::GroupBus:
             entry.topology = std::make_shared<audio::GraphTopology>(audio::GraphTopology::createGroupMicroLayout(viewId));
             entry.layout[viewId + "_output"] = persistence::LayoutPosition { 0.95F, 0.5F };
+            break;
+        case audio::GraphNodeType::SignalGenerator:
+            entry.topology.reset();
+            entry.layout.clear();
             break;
         case audio::GraphNodeType::Output:
             entry.topology = std::make_shared<audio::GraphTopology>(audio::GraphTopology::createOutputMicroLayout(viewId));
@@ -431,6 +473,16 @@ bool Application::deleteMicroNode(const std::string& viewId, const std::string& 
         }
     }
 
+    currentProject_.microViews.erase(nodeId);
+    for (auto counterIt = microNodeCounters_.begin(); counterIt != microNodeCounters_.end();) {
+        if (counterIt->first.rfind(nodeId + ":", 0) == 0) {
+            counterIt = microNodeCounters_.erase(counterIt);
+        } else {
+            ++counterIt;
+        }
+    }
+
+    renumberMicroNodes(viewId);
     applyAudioTopology();
     saveProject();
     return true;
@@ -692,7 +744,7 @@ std::string Application::nextMicroNodeId(const std::string& viewId, NodeTemplate
 
     do {
         ++counter;
-        candidate = prefix + "_" + std::to_string(counter);
+        candidate = viewId + "__" + prefix + "_" + std::to_string(counter);
     } while (topology.findNode(candidate));
 
     return candidate;
@@ -731,6 +783,45 @@ std::uint32_t Application::channelCountForMicroInsertion(const audio::GraphTopol
     const auto downstreamInputs = downstream ? downstream->inputChannelCount() : kDefaultChannels;
     const auto channels = std::max<std::uint32_t>(1U, std::max(upstreamOutputs, downstreamInputs));
     return std::max<std::uint32_t>(1U, std::min<std::uint32_t>(2U, channels));
+}
+
+void Application::renumberMicroNodes(const std::string& viewId) {
+    auto it = currentProject_.microViews.find(viewId);
+    if (it == currentProject_.microViews.end() || !it->second.topology) {
+        return;
+    }
+
+    auto& topology = *it->second.topology;
+
+    std::map<NodeTemplate, std::vector<std::string>> grouped;
+    for (const auto& node : topology.nodes()) {
+        if (const auto templ = templateForGraphType(node.type())) {
+            grouped[*templ].push_back(node.id());
+        }
+    }
+
+    for (auto& [templ, ids] : grouped) {
+        std::sort(ids.begin(), ids.end());
+        std::size_t index = 1;
+        for (const auto& id : ids) {
+            topology.setNodeLabel(id, labelBase(templ) + " " + std::to_string(index++));
+        }
+        const auto prefix = templatePrefix(templ);
+        microNodeCounters_[viewId + ":" + prefix] = ids.size();
+    }
+
+    constexpr std::array<NodeTemplate, 5> trackedTemplates {
+        NodeTemplate::Channel,
+        NodeTemplate::Output,
+        NodeTemplate::Group,
+        NodeTemplate::Effect,
+        NodeTemplate::SignalGenerator
+    };
+    for (const auto templ : trackedTemplates) {
+        if (grouped.find(templ) == grouped.end()) {
+            microNodeCounters_[viewId + ":" + templatePrefix(templ)] = 0;
+        }
+    }
 }
 
 void Application::updateMicroTopologyForNode(const std::string& nodeId) {
@@ -836,6 +927,30 @@ void Application::updateMicroTopologyForNode(const std::string& nodeId) {
     case audio::GraphNodeType::GroupBus: {
         const auto outChannels = clampChannels(macroNodeOpt->outputChannelCount());
         microTopology.setNodeChannelCounts(outputId, outChannels, 0);
+        const auto& nodes = microTopology.nodes();
+        for (const auto& node : nodes) {
+            const auto nodeId = node.id();
+            if (nodeId == outputId) {
+                continue;
+            }
+            const auto nodeOutputs = clampChannels(node.outputChannelCount());
+            if (nodeOutputs == 0) {
+                continue;
+            }
+
+            for (std::uint32_t channel = 0; channel < std::max(outChannels, nodeOutputs); ++channel) {
+                const auto srcChannel = nodeOutputs == 1 ? 0U : std::min<std::uint32_t>(channel, nodeOutputs - 1);
+                const auto dstChannel = outChannels == 1 ? 0U : std::min<std::uint32_t>(channel, outChannels - 1);
+                if (!microTopology.connectionExists(nodeId, outputId, srcChannel, dstChannel)) {
+                    microTopology.connect(audio::GraphConnection {
+                        .fromNodeId = nodeId,
+                        .fromChannel = srcChannel,
+                        .toNodeId = outputId,
+                        .toChannel = dstChannel
+                    });
+                }
+            }
+        }
         break;
     }
     default:
@@ -1024,7 +1139,20 @@ std::shared_ptr<audio::GraphTopology> Application::buildAudioTopology() const {
         return clone;
     };
 
-    for (const auto& [macroId, state] : currentProject_.microViews) {
+    std::vector<std::string> microOrder;
+    microOrder.reserve(currentProject_.microViews.size());
+    for (const auto& [macroId, _] : currentProject_.microViews) {
+        microOrder.push_back(macroId);
+    }
+    std::sort(microOrder.begin(), microOrder.end(), [](const std::string& lhs, const std::string& rhs) {
+        if (lhs.size() == rhs.size()) {
+            return lhs < rhs;
+        }
+        return lhs.size() > rhs.size();
+    });
+
+    for (const auto& macroId : microOrder) {
+        const auto& state = currentProject_.microViews.at(macroId);
         if (!state.topology) {
             continue;
         }
@@ -1061,7 +1189,46 @@ std::shared_ptr<audio::GraphTopology> Application::buildAudioTopology() const {
         }
 
         for (const auto& connection : state.topology->connections()) {
-            composite->connect(connection);
+            auto mapId = [&](const std::string& id) -> std::string {
+                if (const auto outIt = microOutputNodes.find(id); outIt != microOutputNodes.end()) {
+                    return outIt->second;
+                }
+                if (const auto inIt = microInputNodes.find(id); inIt != microInputNodes.end()) {
+                    return inIt->second;
+                }
+                return id;
+            };
+
+            auto fromId = mapId(connection.fromNodeId);
+            auto toId = mapId(connection.toNodeId);
+
+            const auto fromNode = composite->findNode(fromId);
+            const auto toNode = composite->findNode(toId);
+            const auto fromChannels = fromNode ? std::max<std::uint32_t>(1U, fromNode->outputChannelCount()) : 1U;
+            const auto toChannels = toNode ? std::max<std::uint32_t>(1U, toNode->inputChannelCount()) : 1U;
+
+            const auto addConnection = [&](std::uint32_t fromChannel, std::uint32_t toChannel) {
+                if (!composite->connectionExists(fromId, toId, fromChannel, toChannel)) {
+                    composite->connect(audio::GraphConnection {
+                        .fromNodeId = fromId,
+                        .fromChannel = fromChannel,
+                        .toNodeId = toId,
+                        .toChannel = toChannel
+                    });
+                }
+            };
+
+            addConnection(connection.fromChannel, connection.toChannel);
+
+            if (fromChannels == 1 && toChannels > 1) {
+                for (std::uint32_t channel = 0; channel < toChannels; ++channel) {
+                    addConnection(connection.fromChannel, channel);
+                }
+            } else if (fromChannels > 1 && toChannels == 1) {
+                for (std::uint32_t channel = 0; channel < fromChannels; ++channel) {
+                    addConnection(channel, connection.toChannel);
+                }
+            }
         }
     }
 
@@ -1076,12 +1243,18 @@ std::shared_ptr<audio::GraphTopology> Application::buildAudioTopology() const {
             toId = inIt->second;
         }
 
-        composite->connect(audio::GraphConnection {
-            .fromNodeId = fromId,
-            .fromChannel = connection.fromChannel,
-            .toNodeId = toId,
-            .toChannel = connection.toChannel
-        });
+        const auto addConnection = [&](std::uint32_t fromChannel, std::uint32_t toChannel) {
+            if (!composite->connectionExists(fromId, toId, fromChannel, toChannel)) {
+                composite->connect(audio::GraphConnection {
+                    .fromNodeId = fromId,
+                    .fromChannel = fromChannel,
+                    .toNodeId = toId,
+                    .toChannel = toChannel
+                });
+            }
+        };
+
+        addConnection(connection.fromChannel, connection.toChannel);
 
         const auto fromNode = composite->findNode(fromId);
         const auto toNode = composite->findNode(toId);
@@ -1089,26 +1262,12 @@ std::shared_ptr<audio::GraphTopology> Application::buildAudioTopology() const {
         const auto toChannels = toNode ? std::max<std::uint32_t>(1U, toNode->inputChannelCount()) : 1U;
 
         if (fromChannels == 1 && toChannels > 1) {
-            for (std::uint32_t channel = 1; channel < toChannels; ++channel) {
-                if (!composite->connectionExists(fromId, toId, 0, channel)) {
-                    composite->connect(audio::GraphConnection {
-                        .fromNodeId = fromId,
-                        .fromChannel = 0,
-                        .toNodeId = toId,
-                        .toChannel = channel
-                    });
-                }
+            for (std::uint32_t channel = 0; channel < toChannels; ++channel) {
+                addConnection(connection.fromChannel, channel);
             }
         } else if (fromChannels > 1 && toChannels == 1) {
-            for (std::uint32_t channel = 1; channel < fromChannels; ++channel) {
-                if (!composite->connectionExists(fromId, toId, channel, 0)) {
-                    composite->connect(audio::GraphConnection {
-                        .fromNodeId = fromId,
-                        .fromChannel = channel,
-                        .toNodeId = toId,
-                        .toChannel = 0
-                    });
-                }
+            for (std::uint32_t channel = 0; channel < fromChannels; ++channel) {
+                addConnection(channel, connection.toChannel);
             }
         }
     }
@@ -1124,8 +1283,8 @@ std::shared_ptr<audio::GraphTopology> Application::buildAudioTopology() const {
         if (macroIt == macroNodes.end()) {
             continue;
         }
-        const auto channels = std::max<std::uint32_t>(1U, std::min<std::uint32_t>(macroIt->second.outputChannelCount(), 2U));
-        for (std::uint32_t channel = 0; channel < channels; ++channel) {
+        const auto outputChannels = std::max<std::uint32_t>(1U, std::min<std::uint32_t>(macroIt->second.outputChannelCount(), 2U));
+        for (std::uint32_t channel = 0; channel < outputChannels; ++channel) {
             composite->connect(audio::GraphConnection {
                 .fromNodeId = macroId,
                 .fromChannel = channel,
@@ -1236,7 +1395,9 @@ bool Application::createMicroNode(const std::string& viewId,
             log(LogCategory::Ui, "createMicroNode insertion fallback for {} between {} -> {} in {}", id, insertBetween->first, insertBetween->second, viewId);
         }
     }
+    renumberMicroNodes(viewId);
 
+    updateMicroTopologyForNode(viewId);
     applyAudioTopology();
     saveProject();
     return true;
@@ -1406,6 +1567,13 @@ bool Application::configureNodeChannels(const std::string& nodeId,
     nodeGraphView_.setTopology(currentProject_.graphTopology);
     saveProject();
     return true;
+}
+
+audio::GraphNodeType Application::resolveNodeType(const std::string& nodeId) const {
+    if (const auto type = nodeTypeForId(nodeId)) {
+        return *type;
+    }
+    return audio::GraphNodeType::GroupBus;
 }
 
 } // namespace broadcastmix::core

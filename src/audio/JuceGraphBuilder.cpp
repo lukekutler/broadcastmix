@@ -117,9 +117,7 @@ void JuceGraphBuilder::rebuildFromTopology(const GraphTopology& topology) {
     int hardwareOutputChannels = 0;
     if (hardwareOutputNodeId_) {
         if (auto* outputNode = graph_.getNodeForId(*hardwareOutputNodeId_)) {
-            if (auto* outputProcessor = outputNode->getProcessor()) {
-                hardwareOutputChannels = outputProcessor->getTotalNumInputChannels();
-            }
+            hardwareOutputChannels = outputNode->getProcessor() ? outputNode->getProcessor()->getTotalNumInputChannels() : 0;
         }
 
         for (const auto& binding : outputBindings) {

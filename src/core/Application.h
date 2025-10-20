@@ -46,6 +46,8 @@ public:
     void startRealtimeEngine();
     void stopRealtimeEngine();
     [[nodiscard]] audio::AudioEngineStatus audioStatus() const;
+    [[nodiscard]] std::optional<audio::GraphNodeType> nodeTypeForId(const std::string& nodeId) const;
+    [[nodiscard]] std::optional<audio::GraphNode> nodeForId(const std::string& nodeId) const;
     [[nodiscard]] std::shared_ptr<const audio::GraphTopology> graphTopology() const;
     [[nodiscard]] audio::AudioEngineSettings audioSettings() const;
     [[nodiscard]] ui::NodeGraphView& nodeGraphView() noexcept;
@@ -99,9 +101,11 @@ private:
     std::string nextNodeId(NodeTemplate type);
     std::string nextMicroNodeId(const std::string& viewId, NodeTemplate type, audio::GraphTopology& topology);
     void renumberMacroNodes(NodeTemplate type);
+    void renumberMicroNodes(const std::string& viewId);
     [[nodiscard]] std::uint32_t channelCountForMicroInsertion(const audio::GraphTopology& topology,
                                                               const std::optional<std::pair<std::string, std::string>>& insertBetween) const;
     void updateMicroTopologyForNode(const std::string& nodeId);
+    [[nodiscard]] audio::GraphNodeType resolveNodeType(const std::string& nodeId) const;
     static bool rewireForInsertion(audio::GraphTopology& topology,
                                    const std::optional<std::pair<std::string, std::string>>& insertBetween,
                                    const std::string& newNodeId,
