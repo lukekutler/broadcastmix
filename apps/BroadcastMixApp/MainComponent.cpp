@@ -27,6 +27,20 @@ MainComponent::MainComponent(core::Application& app)
         selectedNode_ = nodeId;
         refreshIoConfigPanel();
     });
+    graphComponent_.setNodeRenameHandler([this](const std::string& nodeId, const std::string& newLabel) {
+        if (app_.renameNode(nodeId, newLabel)) {
+            if (currentMicro_) {
+                auto descriptor = app_.microViewDescriptor(currentMicro_->id);
+                switchToMicroView(currentMicro_->id,
+                                  labelForNode(currentMicro_->id),
+                                  descriptor);
+            } else {
+                graphComponent_.setGraphView(&app_.nodeGraphView());
+                updateBreadcrumbs();
+            }
+            refreshIoConfigPanel();
+        }
+    });
 
     headline_.setText(kHeadlineText, juce::dontSendNotification);
     headline_.setJustificationType(juce::Justification::centred);
@@ -216,6 +230,12 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
             juce::Logger::writeToLog("MainComponent :: toggle handled");
             return true;
         }
+    }
+
+    const auto character = key.getTextCharacter();
+    if ((character == 'r' || character == 'R') && selectedNode_) {
+        graphComponent_.beginNodeRename(*selectedNode_);
+        return true;
     }
 
     return Component::keyPressed(key);

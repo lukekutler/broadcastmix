@@ -87,6 +87,7 @@ public:
     bool configureNodeChannels(const std::string& nodeId,
                                std::uint32_t inputChannels,
                                std::uint32_t outputChannels);
+    bool renameNode(const std::string& nodeId, const std::string& newLabel);
 
 private:
     void applyMacroLayout();

@@ -16,7 +16,10 @@
 
 namespace broadcastmix::app {
 
-class NodeGraphComponent : public juce::Component, public juce::DragAndDropTarget, private juce::Timer {
+class NodeGraphComponent : public juce::Component,
+                           public juce::DragAndDropTarget,
+                           private juce::Timer,
+                           private juce::TextEditor::Listener {
 public:
     struct NodeCreateRequest {
         std::string templateId;
@@ -47,6 +50,8 @@ public:
     void setNodeSwapHandler(std::function<void(const std::string&, const std::string&)> handler);
     void setNodeInsertHandler(std::function<void(const std::string&, const std::pair<std::string, std::string>&)> handler);
     void setFixedEndpoints(std::optional<std::string> inputId, std::optional<std::string> outputId);
+    void setNodeRenameHandler(std::function<void(const std::string&, const std::string&)> handler);
+    void beginNodeRename(const std::string& nodeId);
     [[nodiscard]] std::optional<std::string> selectedNode() const noexcept;
 
 private:
@@ -81,10 +86,14 @@ private:
     [[nodiscard]] std::optional<std::string> hitTestNode(const juce::Point<float>& position) const;
     [[nodiscard]] std::optional<PortSelection> findPortAt(const juce::Point<float>& position) const;
     [[nodiscard]] juce::Point<float> portPosition(const PortSelection& port) const;
+    [[nodiscard]] std::optional<juce::Rectangle<float>> labelBoundsForNode(const std::string& nodeId) const;
+    void beginInlineRename(const std::string& nodeId, const juce::Rectangle<int>& bounds);
+    void commitInlineRename(bool apply);
 
     ui::NodeGraphView* view_ { nullptr };
     std::size_t lastLayoutVersion_ { 0 };
     std::unordered_map<std::string, juce::Point<float>> cachedPositions_;
+    std::unordered_map<std::string, juce::Rectangle<float>> labelBoundsCache_;
     std::optional<std::string> draggingNodeId_;
     std::optional<std::string> selectedNodeId_;
     juce::Point<float> dragOffset_ {};
@@ -99,6 +108,7 @@ private:
     std::function<void(const NodeCreateRequest&)> onNodeCreated_;
     std::function<void(const std::string&, const std::string&)> onNodesSwapped_;
     std::function<void(const std::string&, const std::pair<std::string, std::string>&)> onNodeInserted_;
+    std::function<void(const std::string&, const std::string&)> onNodeRenamed_;
 
     std::unordered_map<std::string, std::vector<juce::Point<float>>> inputPortPositions_;
     std::unordered_map<std::string, std::vector<juce::Point<float>>> outputPortPositions_;
@@ -119,6 +129,14 @@ private:
     std::optional<float> fixedOutputNormY_;
     bool fixedInputEnabled_ { false };
     bool fixedOutputEnabled_ { false };
+    std::unique_ptr<juce::TextEditor> renameEditor_;
+    std::string renamingNodeId_;
+    std::string renameOriginalText_;
+
+    void textEditorTextChanged(juce::TextEditor&) override { }
+    void textEditorReturnKeyPressed(juce::TextEditor& editor) override;
+    void textEditorEscapeKeyPressed(juce::TextEditor& editor) override;
+    void textEditorFocusLost(juce::TextEditor& editor) override;
 };
 
 } // namespace broadcastmix::app

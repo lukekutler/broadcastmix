@@ -134,6 +134,9 @@ void NodeGraphComponent::paint(juce::Graphics& g) {
 
         g.setColour(toColour(theme.textPrimary));
         auto labelBounds = nodeBounds.reduced(12.0F);
+        if (renameEditor_ && renamingNodeId_ == nodeVisual.id) {
+            renameEditor_->setBounds(labelBounds.toNearestInt());
+        }
         g.setFont(juce::Font(juce::FontOptions { 15.0F, juce::Font::bold }));
         g.drawFittedText(nodeVisual.label,
                          labelBounds.toNearestInt(),
@@ -308,6 +311,52 @@ void NodeGraphComponent::mouseDown(const juce::MouseEvent& event) {
     }
 
     refreshCachedPositions();
+
+    if (event.mods.isPopupMenu()) {
+        if (const auto hitNode = hitTestNode(event.position)) {
+            selectedConnection_.reset();
+            draggingNodeId_.reset();
+            draggingPort_.reset();
+            hoverPort_.reset();
+            swapTargetId_.reset();
+            pendingDropConnection_.reset();
+            selectedNodeId_ = *hitNode;
+            grabKeyboardFocus();
+            if (onSelectionChanged_) {
+                onSelectionChanged_(selectedNodeId_);
+            }
+            repaint();
+
+            juce::PopupMenu menu;
+            menu.addItem(1, "Rename...");
+
+            const auto screenPoint = event.getScreenPosition();
+            auto options = juce::PopupMenu::Options()
+                               .withTargetComponent(this)
+                               .withTargetScreenArea({ screenPoint.x, screenPoint.y, 1, 1 });
+
+            juce::Component::SafePointer<NodeGraphComponent> safeThis(this);
+            const auto nodeId = *hitNode;
+            menu.showMenuAsync(options, [safeThis, nodeId](int result) {
+                if (result == 1 && safeThis != nullptr) {
+                    safeThis->beginNodeRename(nodeId);
+                }
+            });
+        } else {
+            selectedNodeId_.reset();
+            selectedConnection_.reset();
+            draggingNodeId_.reset();
+            draggingPort_.reset();
+            hoverPort_.reset();
+            swapTargetId_.reset();
+            pendingDropConnection_.reset();
+            if (onSelectionChanged_) {
+                onSelectionChanged_(selectedNodeId_);
+            }
+            repaint();
+        }
+        return;
+    }
 
     const float lineHitTolerance = 6.0F;
     for (const auto& segment : connectionSegments_) {
@@ -491,12 +540,16 @@ void NodeGraphComponent::mouseDoubleClick(const juce::MouseEvent& event) {
     }
 
     refreshCachedPositions();
-    if (!onNodeDoubleClicked_) {
-        return;
-    }
 
     if (const auto hitNode = hitTestNode(event.position)) {
-        onNodeDoubleClicked_(*hitNode);
+        if (const auto bounds = labelBoundsForNode(*hitNode); bounds && bounds->contains(event.position)) {
+            beginInlineRename(*hitNode, bounds->toNearestInt());
+            return;
+        }
+
+        if (onNodeDoubleClicked_) {
+            onNodeDoubleClicked_(*hitNode);
+        }
     }
 }
 
@@ -504,6 +557,14 @@ bool NodeGraphComponent::keyPressed(const juce::KeyPress& key) {
     juce::Logger::writeToLog("NodeGraphComponent :: keyPressed code=" + juce::String(key.getKeyCode())
         + " cmd=" + juce::String(key.getModifiers().isCommandDown() ? "true" : "false")
         + " selection=" + (selectedNodeId_ ? *selectedNodeId_ : juce::String("<none>")));
+
+    if (renameEditor_) {
+        if (key.getKeyCode() == juce::KeyPress::escapeKey) {
+            commitInlineRename(false);
+            return true;
+        }
+        return false;
+    }
 
     if (key.getKeyCode() == juce::KeyPress::escapeKey) {
         if (selectedNodeId_) {
@@ -737,6 +798,7 @@ void NodeGraphComponent::setMeterProvider(std::function<std::array<float, 2>(con
 }
 
 void NodeGraphComponent::setGraphView(ui::NodeGraphView* view) {
+    commitInlineRename(false);
     view_ = view;
     lastLayoutVersion_ = 0;
     draggingNodeId_.reset();
@@ -985,6 +1047,117 @@ juce::Point<float> NodeGraphComponent::portPosition(const PortSelection& port) c
     }
 
     return juce::Point<float> {};
+}
+
+std::optional<juce::Rectangle<float>> NodeGraphComponent::labelBoundsForNode(const std::string& nodeId) const {
+    if (view_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto posIt = cachedPositions_.find(nodeId);
+    if (posIt == cachedPositions_.end()) {
+        return std::nullopt;
+    }
+    const auto nodeBounds = nodeBoundsForPosition(posIt->second);
+    return nodeBounds.reduced(12.0F);
+}
+
+void NodeGraphComponent::beginInlineRename(const std::string& nodeId, const juce::Rectangle<int>& bounds) {
+    if (view_ == nullptr) {
+        return;
+    }
+    if (renameEditor_) {
+        commitInlineRename(false);
+    }
+
+    std::string currentLabel = nodeId;
+    const auto& nodes = view_->nodes();
+    const auto nodeIt = std::find_if(nodes.begin(), nodes.end(), [&](const auto& node) {
+        return node.id == nodeId;
+    });
+    if (nodeIt != nodes.end() && !nodeIt->label.empty()) {
+        currentLabel = nodeIt->label;
+    }
+
+    auto editor = std::make_unique<juce::TextEditor>();
+    editor->setBounds(bounds);
+    editor->setIndents(2, 2);
+    editor->setReturnKeyStartsNewLine(false);
+    editor->setJustification(juce::Justification::centred);
+    editor->setColour(juce::TextEditor::backgroundColourId, juce::Colour::fromFloatRGBA(0.0F, 0.0F, 0.0F, 0.2F));
+    editor->setColour(juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+    editor->setColour(juce::TextEditor::focusedOutlineColourId, toColour(view_->theme().accent));
+    editor->setColour(juce::TextEditor::textColourId, toColour(view_->theme().textPrimary));
+    editor->setFont(juce::Font(juce::FontOptions { 15.0F, juce::Font::bold }));
+    editor->setSelectAllWhenFocused(true);
+    editor->setText(currentLabel, juce::dontSendNotification);
+    editor->addListener(this);
+
+    renamingNodeId_ = nodeId;
+    renameOriginalText_ = currentLabel;
+    renameEditor_ = std::move(editor);
+    addAndMakeVisible(renameEditor_.get());
+    renameEditor_->grabKeyboardFocus();
+    renameEditor_->selectAll();
+}
+
+void NodeGraphComponent::commitInlineRename(bool apply) {
+    if (!renameEditor_) {
+        return;
+    }
+
+    auto* editor = renameEditor_.get();
+    const auto nodeId = renamingNodeId_;
+    const auto original = renameOriginalText_;
+
+    editor->removeListener(this);
+    removeChildComponent(editor);
+
+    std::string newLabel;
+    if (apply) {
+        auto text = editor->getText().trim();
+        newLabel = text.toStdString();
+    }
+
+    renameEditor_.reset();
+    renamingNodeId_.clear();
+    renameOriginalText_.clear();
+
+    if (apply && onNodeRenamed_ && !nodeId.empty()) {
+        if (newLabel != original) {
+            onNodeRenamed_(nodeId, newLabel);
+        }
+    }
+
+    repaint();
+}
+
+void NodeGraphComponent::setNodeRenameHandler(std::function<void(const std::string&, const std::string&)> handler) {
+    onNodeRenamed_ = std::move(handler);
+}
+
+void NodeGraphComponent::beginNodeRename(const std::string& nodeId) {
+    refreshCachedPositions();
+    if (const auto bounds = labelBoundsForNode(nodeId)) {
+        beginInlineRename(nodeId, bounds->toNearestInt());
+    }
+}
+
+void NodeGraphComponent::textEditorReturnKeyPressed(juce::TextEditor& editor) {
+    if (renameEditor_.get() == &editor) {
+        commitInlineRename(true);
+    }
+}
+
+void NodeGraphComponent::textEditorEscapeKeyPressed(juce::TextEditor& editor) {
+    if (renameEditor_.get() == &editor) {
+        commitInlineRename(false);
+    }
+}
+
+void NodeGraphComponent::textEditorFocusLost(juce::TextEditor& editor) {
+    if (renameEditor_.get() == &editor) {
+        commitInlineRename(true);
+    }
 }
 
 } // namespace broadcastmix::app

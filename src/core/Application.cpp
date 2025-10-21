@@ -4,11 +4,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <iostream>
+
+#include <juce_core/juce_core.h>
 
 namespace {
 
@@ -19,6 +22,32 @@ broadcastmix::ui::NodeGraphView::PositionOverrideMap toOverrides(const std::unor
         overrides.emplace(id, broadcastmix::ui::NodeGraphView::PositionOverride { position.normX, position.normY });
     }
     return overrides;
+}
+
+bool labelIsDefault(const std::string& label, const std::string& base) {
+    if (label.empty()) {
+        return true;
+    }
+    if (label.rfind(base + " ", 0) != 0) {
+        return false;
+    }
+    for (std::size_t i = base.size() + 1; i < label.size(); ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(label[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string trimCopy(std::string text) {
+    const auto isSpace = [](unsigned char ch) { return std::isspace(ch); };
+    text.erase(text.begin(), std::find_if(text.begin(), text.end(), [&](unsigned char ch) { return !isSpace(ch); }));
+    text.erase(std::find_if(text.rbegin(), text.rend(), [&](unsigned char ch) { return !isSpace(ch); }).base(), text.end());
+    return text;
+}
+
+std::string generateUuid() {
+    return juce::Uuid().toString().toStdString();
 }
 
 }
@@ -726,11 +755,11 @@ std::string Application::makeLabel(NodeTemplate type, std::size_t index) const {
 std::string Application::nextNodeId(NodeTemplate type) {
     const auto prefix = templatePrefix(type);
     auto& counter = nodeCounters_[prefix];
-    std::string candidate;
+    ++counter;
 
+    std::string candidate;
     do {
-        ++counter;
-        candidate = prefix + "_" + std::to_string(counter);
+        candidate = generateUuid();
     } while (currentProject_.graphTopology && currentProject_.graphTopology->findNode(candidate));
 
     return candidate;
@@ -740,11 +769,11 @@ std::string Application::nextMicroNodeId(const std::string& viewId, NodeTemplate
     const auto prefix = templatePrefix(type);
     const auto counterKey = viewId + ":" + prefix;
     auto& counter = microNodeCounters_[counterKey];
-    std::string candidate;
+    ++counter;
 
+    std::string candidate;
     do {
-        ++counter;
-        candidate = viewId + "__" + prefix + "_" + std::to_string(counter);
+        candidate = generateUuid();
     } while (topology.findNode(candidate));
 
     return candidate;
@@ -764,10 +793,17 @@ void Application::renumberMacroNodes(NodeTemplate type) {
     }
 
     std::sort(ids.begin(), ids.end());
+    const auto base = labelBase(type);
+    const auto prefix = templatePrefix(type);
     std::size_t index = 1;
     for (const auto& id : ids) {
-        currentProject_.graphTopology->setNodeLabel(id, makeLabel(type, index++));
+        if (const auto nodeOpt = currentProject_.graphTopology->findNode(id)) {
+            if (labelIsDefault(nodeOpt->label(), base)) {
+                currentProject_.graphTopology->setNodeLabel(id, makeLabel(type, index++));
+            }
+        }
     }
+    nodeCounters_[prefix] = std::max<std::size_t>(index - 1, ids.size());
 }
 
 std::uint32_t Application::channelCountForMicroInsertion(const audio::GraphTopology& topology,
@@ -802,12 +838,17 @@ void Application::renumberMicroNodes(const std::string& viewId) {
 
     for (auto& [templ, ids] : grouped) {
         std::sort(ids.begin(), ids.end());
+        const auto base = labelBase(templ);
         std::size_t index = 1;
         for (const auto& id : ids) {
-            topology.setNodeLabel(id, labelBase(templ) + " " + std::to_string(index++));
+            if (const auto nodeOpt = topology.findNode(id)) {
+                if (labelIsDefault(nodeOpt->label(), base)) {
+                    topology.setNodeLabel(id, labelBase(templ) + " " + std::to_string(index++));
+                }
+            }
         }
         const auto prefix = templatePrefix(templ);
-        microNodeCounters_[viewId + ":" + prefix] = ids.size();
+        microNodeCounters_[viewId + ":" + prefix] = std::max<std::size_t>(index - 1, ids.size());
     }
 
     constexpr std::array<NodeTemplate, 5> trackedTemplates {
@@ -1567,6 +1608,43 @@ bool Application::configureNodeChannels(const std::string& nodeId,
     nodeGraphView_.setTopology(currentProject_.graphTopology);
     saveProject();
     return true;
+}
+
+bool Application::renameNode(const std::string& nodeId, const std::string& newLabel) {
+    const auto trimmed = trimCopy(newLabel);
+    bool changed = false;
+    std::optional<NodeTemplate> macroTemplate;
+
+    if (currentProject_.graphTopology) {
+        if (const auto macroNode = currentProject_.graphTopology->findNode(nodeId)) {
+            currentProject_.graphTopology->setNodeLabel(nodeId, trimmed);
+            changed = true;
+            macroTemplate = templateForGraphType(macroNode->type());
+        }
+    }
+
+    for (auto& [viewId, state] : currentProject_.microViews) {
+        if (!state.topology) {
+            continue;
+        }
+        if (state.topology->findNode(nodeId)) {
+            state.topology->setNodeLabel(nodeId, trimmed);
+            changed = true;
+            renumberMicroNodes(viewId);
+        }
+    }
+
+    if (macroTemplate) {
+        renumberMacroNodes(*macroTemplate);
+    }
+
+    if (changed) {
+        nodeGraphView_.setTopology(currentProject_.graphTopology);
+        applyAudioTopology();
+        saveProject();
+    }
+
+    return changed;
 }
 
 audio::GraphNodeType Application::resolveNodeType(const std::string& nodeId) const {
