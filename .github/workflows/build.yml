@@ -8,20 +8,25 @@ on:
 
 jobs:
   cmake:
-    runs-on: ubuntu-latest
+    runs-on: macos-14  # or 'macos-latest'
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+      - name: Show Xcode version (sanity)
+        run: xcodebuild -version
+
+      - name: Install build tools
+        run: |
+          brew update
+          brew install cmake ninja pkg-config
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DBROADCASTMIX_BUILD_TESTS=ON
+        run: cmake -S . -B build -G Ninja -DBROADCASTMIX_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
-        run: cmake --build build --config Release
+        run: cmake --build build --config Release --parallel
 
       - name: Run smoke tests
         run: ctest --test-dir build --output-on-failure
