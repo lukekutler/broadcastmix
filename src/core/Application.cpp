@@ -50,6 +50,8 @@ std::string generateUuid() {
     return juce::Uuid().toString().toStdString();
 }
 
+using PositionPresetState = broadcastmix::persistence::PositionPresetState;
+
 }
 
 namespace broadcastmix::core {
@@ -213,6 +215,12 @@ void Application::applyMacroLayout() {
     nodeGraphView_.setPositionOverrides(toOverrides(currentProject_.macroLayout));
 }
 
+void Application::setPositionPresetForNode(const std::string& nodeId, const std::string& presetName) {
+    if (currentProject_.graphTopology) {
+        currentProject_.graphTopology->setNodePresetName(nodeId, presetName);
+    }
+}
+
 void Application::saveProject() {
     if (projectLoaded_ && currentProjectPath_) {
         projectSerializer_.save(currentProject_, *currentProjectPath_);
@@ -233,6 +241,7 @@ Application::MicroViewDescriptor Application::ensureMicroView(const std::string&
             std::cout << "[Application] ensureMicroView channel layout created for " << viewId << std::endl;
             break;
         case audio::GraphNodeType::GroupBus:
+        case audio::GraphNodeType::Position:
             entry.topology = std::make_shared<audio::GraphTopology>(audio::GraphTopology::createGroupMicroLayout(viewId));
             entry.layout[viewId + "_output"] = persistence::LayoutPosition { 0.95F, 0.5F };
             break;
@@ -647,6 +656,8 @@ std::string Application::templatePrefix(NodeTemplate type) const {
         return "output";
     case NodeTemplate::Group:
         return "group";
+    case NodeTemplate::Position:
+        return "position";
     case NodeTemplate::Effect:
         return "effect";
     case NodeTemplate::SignalGenerator:
@@ -664,6 +675,8 @@ audio::GraphNodeType Application::graphTypeForTemplate(NodeTemplate type) const 
         return audio::GraphNodeType::Output;
     case NodeTemplate::Group:
         return audio::GraphNodeType::GroupBus;
+    case NodeTemplate::Position:
+        return audio::GraphNodeType::Position;
     case NodeTemplate::Effect:
         return audio::GraphNodeType::Plugin;
     case NodeTemplate::SignalGenerator:
@@ -681,6 +694,8 @@ std::optional<Application::NodeTemplate> Application::templateForGraphType(audio
         return NodeTemplate::Output;
     case audio::GraphNodeType::GroupBus:
         return NodeTemplate::Group;
+    case audio::GraphNodeType::Position:
+        return NodeTemplate::Position;
     case audio::GraphNodeType::Plugin:
         return NodeTemplate::Effect;
     case audio::GraphNodeType::SignalGenerator:
@@ -709,6 +724,7 @@ void Application::configureChannelsForTemplate(audio::GraphNode& node, NodeTempl
         addStereoInputs();
         break;
     case NodeTemplate::Group:
+    case NodeTemplate::Position:
     case NodeTemplate::Effect:
         addStereoInputs();
         addStereoOutputs();
@@ -734,6 +750,9 @@ std::string Application::labelBase(NodeTemplate type) const {
         break;
     case NodeTemplate::Group:
         base = "Group";
+        break;
+    case NodeTemplate::Position:
+        base = "Position";
         break;
     case NodeTemplate::Effect:
         base = "Effect";
@@ -851,10 +870,11 @@ void Application::renumberMicroNodes(const std::string& viewId) {
         microNodeCounters_[viewId + ":" + prefix] = std::max<std::size_t>(index - 1, ids.size());
     }
 
-    constexpr std::array<NodeTemplate, 5> trackedTemplates {
+    constexpr std::array<NodeTemplate, 6> trackedTemplates {
         NodeTemplate::Channel,
         NodeTemplate::Output,
         NodeTemplate::Group,
+        NodeTemplate::Position,
         NodeTemplate::Effect,
         NodeTemplate::SignalGenerator
     };
@@ -965,7 +985,8 @@ void Application::updateMicroTopologyForNode(const std::string& nodeId) {
         }
         break;
     }
-    case audio::GraphNodeType::GroupBus: {
+    case audio::GraphNodeType::GroupBus:
+    case audio::GraphNodeType::Position: {
         const auto outChannels = clampChannels(macroNodeOpt->outputChannelCount());
         microTopology.setNodeChannelCounts(outputId, outChannels, 0);
         const auto& nodes = microTopology.nodes();
@@ -1148,6 +1169,7 @@ std::shared_ptr<audio::GraphTopology> Application::buildAudioTopology() const {
         case audio::GraphNodeType::Output:
             return endpoints.hasInput && endpoints.hasOutput;
         case audio::GraphNodeType::GroupBus:
+        case audio::GraphNodeType::Position:
             return endpoints.hasInput && endpoints.hasOutput;
         default:
             return endpoints.hasInput && endpoints.hasOutput;
@@ -1171,6 +1193,11 @@ std::shared_ptr<audio::GraphTopology> Application::buildAudioTopology() const {
         audio::GraphNode clone(source.id(), type);
         clone.setLabel(source.label());
         clone.setEnabled(source.enabled());
+        clone.setPerson(source.person());
+        clone.setRole(source.role());
+        clone.setSource(source.source());
+        clone.setProfileImagePath(source.profileImagePath());
+        clone.setPresetName(source.presetName());
         for (std::uint32_t i = 0; i < inputs; ++i) {
             clone.addInputChannel();
         }
@@ -1610,14 +1637,223 @@ bool Application::configureNodeChannels(const std::string& nodeId,
     return true;
 }
 
+bool Application::updatePositionPerson(const std::string& nodeId, const std::string& person) {
+    if (!currentProject_.graphTopology) {
+        return false;
+    }
+
+    const auto nodeCopy = currentProject_.graphTopology->findNode(nodeId);
+    if (!nodeCopy || nodeCopy->type() != audio::GraphNodeType::Position) {
+        return false;
+    }
+
+    const auto trimmed = trimCopy(person);
+    if (nodeCopy->person() == trimmed && nodeCopy->label() == trimmed) {
+        return false;
+    }
+
+    currentProject_.graphTopology->setNodePerson(nodeId, trimmed);
+    currentProject_.graphTopology->setNodeLabel(nodeId, trimmed);
+    setPositionPresetForNode(nodeId, {});
+
+    for (auto& [viewId, state] : currentProject_.microViews) {
+        if (state.topology && state.topology->findNode(nodeId)) {
+            state.topology->setNodePerson(nodeId, trimmed);
+            state.topology->setNodeLabel(nodeId, trimmed);
+        }
+    }
+
+    nodeGraphView_.setTopology(currentProject_.graphTopology);
+    saveProject();
+    return true;
+}
+
+bool Application::updatePositionRole(const std::string& nodeId, const std::string& role, bool preservePreset) {
+    const auto trimmed = trimCopy(role);
+    if (!currentProject_.graphTopology) {
+        return false;
+    }
+
+    const auto nodeCopy = currentProject_.graphTopology->findNode(nodeId);
+    if (!nodeCopy || nodeCopy->type() != audio::GraphNodeType::Position) {
+        return false;
+    }
+
+    if (nodeCopy->role() == trimmed) {
+        return false;
+    }
+
+    currentProject_.graphTopology->setNodeRole(nodeId, trimmed);
+
+    if (!preservePreset) {
+        setPositionPresetForNode(nodeId, {});
+    }
+
+    for (auto& [viewId, state] : currentProject_.microViews) {
+        if (state.topology && state.topology->findNode(nodeId)) {
+            state.topology->setNodeRole(nodeId, trimmed);
+        }
+    }
+
+    nodeGraphView_.setTopology(currentProject_.graphTopology);
+    saveProject();
+    return true;
+}
+
+bool Application::updatePositionProfileImage(const std::string& nodeId, const std::string& imagePath, bool preservePreset) {
+    if (!currentProject_.graphTopology) {
+        return false;
+    }
+
+    const auto nodeCopy = currentProject_.graphTopology->findNode(nodeId);
+    if (!nodeCopy || nodeCopy->type() != audio::GraphNodeType::Position) {
+        return false;
+    }
+
+    if (nodeCopy->profileImagePath() == imagePath) {
+        return false;
+    }
+
+    currentProject_.graphTopology->setNodeProfileImagePath(nodeId, imagePath);
+
+    if (!preservePreset) {
+        setPositionPresetForNode(nodeId, {});
+    }
+
+    for (auto& [viewId, state] : currentProject_.microViews) {
+        if (state.topology && state.topology->findNode(nodeId)) {
+            state.topology->setNodeProfileImagePath(nodeId, imagePath);
+        }
+    }
+
+    nodeGraphView_.setTopology(currentProject_.graphTopology);
+    saveProject();
+    return true;
+}
+
+std::vector<std::string> Application::positionPresetNames() const {
+    std::vector<std::string> names;
+    names.reserve(currentProject_.positionPresets.size());
+    for (const auto& preset : currentProject_.positionPresets) {
+        names.push_back(preset.name);
+    }
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    return names;
+}
+
+bool Application::savePositionPreset(const std::string& nodeId, const std::string& presetName) {
+    if (!currentProject_.graphTopology) {
+        return false;
+    }
+
+    auto macroNode = currentProject_.graphTopology->findNode(nodeId);
+    if (!macroNode || macroNode->type() != audio::GraphNodeType::Position) {
+        return false;
+    }
+
+    auto descriptor = ensureMicroView(nodeId);
+    PositionPresetState preset;
+    preset.name = trimCopy(presetName);
+    if (preset.name.empty()) {
+        return false;
+    }
+    preset.person = macroNode->person();
+    preset.role = macroNode->role();
+    preset.profileImagePath = macroNode->profileImagePath();
+    if (descriptor.topology) {
+        preset.topology = std::make_shared<audio::GraphTopology>(*descriptor.topology);
+    } else {
+        preset.topology = std::make_shared<audio::GraphTopology>();
+    }
+    preset.layout = descriptor.layout;
+
+    auto& presets = currentProject_.positionPresets;
+    const auto existing = std::find_if(presets.begin(), presets.end(), [&](const PositionPresetState& state) {
+        return state.name == preset.name;
+    });
+    if (existing != presets.end()) {
+        *existing = std::move(preset);
+    } else {
+        presets.push_back(std::move(preset));
+    }
+
+    setPositionPresetForNode(nodeId, presetName);
+    saveProject();
+    return true;
+}
+
+bool Application::applyPositionPreset(const std::string& nodeId, const std::string& presetName) {
+    if (!currentProject_.graphTopology) {
+        return false;
+    }
+
+    auto macroNode = currentProject_.graphTopology->findNode(nodeId);
+    if (!macroNode || macroNode->type() != audio::GraphNodeType::Position) {
+        return false;
+    }
+
+    const auto presetIt = std::find_if(currentProject_.positionPresets.begin(), currentProject_.positionPresets.end(), [&](const PositionPresetState& preset) {
+        return preset.name == presetName;
+    });
+    if (presetIt == currentProject_.positionPresets.end()) {
+        return false;
+    }
+
+    const auto& preset = *presetIt;
+    currentProject_.graphTopology->setNodePerson(nodeId, preset.person);
+    currentProject_.graphTopology->setNodeLabel(nodeId, preset.person);
+    currentProject_.graphTopology->setNodeRole(nodeId, preset.role);
+    currentProject_.graphTopology->setNodeProfileImagePath(nodeId, preset.profileImagePath);
+    setPositionPresetForNode(nodeId, preset.name);
+
+    auto& state = currentProject_.microViews[nodeId];
+    if (preset.topology) {
+        state.topology = std::make_shared<audio::GraphTopology>(*preset.topology);
+    } else {
+        state.topology = std::make_shared<audio::GraphTopology>();
+    }
+    state.layout = preset.layout;
+
+    updateMicroTopologyForNode(nodeId);
+    applyAudioTopology();
+    nodeGraphView_.setTopology(currentProject_.graphTopology);
+    saveProject();
+    return true;
+}
+
+bool Application::clearPositionPreset(const std::string& nodeId) {
+    if (!currentProject_.graphTopology) {
+        return false;
+    }
+    const auto nodeCopy = currentProject_.graphTopology->findNode(nodeId);
+    if (!nodeCopy || nodeCopy->type() != audio::GraphNodeType::Position) {
+        return false;
+    }
+    if (nodeCopy->presetName().empty()) {
+        return false;
+    }
+    setPositionPresetForNode(nodeId, {});
+    nodeGraphView_.setTopology(currentProject_.graphTopology);
+    saveProject();
+    return true;
+}
+
 bool Application::renameNode(const std::string& nodeId, const std::string& newLabel) {
     const auto trimmed = trimCopy(newLabel);
     bool changed = false;
     std::optional<NodeTemplate> macroTemplate;
 
+    bool isPositionNode = false;
+
     if (currentProject_.graphTopology) {
         if (const auto macroNode = currentProject_.graphTopology->findNode(nodeId)) {
+            isPositionNode = macroNode->type() == audio::GraphNodeType::Position;
             currentProject_.graphTopology->setNodeLabel(nodeId, trimmed);
+            if (isPositionNode) {
+                currentProject_.graphTopology->setNodePerson(nodeId, trimmed);
+                setPositionPresetForNode(nodeId, {});
+            }
             changed = true;
             macroTemplate = templateForGraphType(macroNode->type());
         }
@@ -1629,6 +1865,9 @@ bool Application::renameNode(const std::string& nodeId, const std::string& newLa
         }
         if (state.topology->findNode(nodeId)) {
             state.topology->setNodeLabel(nodeId, trimmed);
+            if (isPositionNode) {
+                state.topology->setNodePerson(nodeId, trimmed);
+            }
             changed = true;
             renumberMicroNodes(viewId);
         }

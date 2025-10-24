@@ -37,6 +37,8 @@ std::string nodeTypeToString(audio::GraphNodeType type) {
         return "Channel";
     case audio::GraphNodeType::GroupBus:
         return "GroupBus";
+    case audio::GraphNodeType::Position:
+        return "Position";
     case audio::GraphNodeType::BroadcastBus:
         return "BroadcastBus";
     case audio::GraphNodeType::MixBus:
@@ -59,6 +61,7 @@ std::optional<audio::GraphNodeType> nodeTypeFromString(const std::string& type) 
         { "Input", audio::GraphNodeType::Input },
         { "Channel", audio::GraphNodeType::Channel },
         { "GroupBus", audio::GraphNodeType::GroupBus },
+        { "Position", audio::GraphNodeType::Position },
         { "BroadcastBus", audio::GraphNodeType::BroadcastBus },
         { "MixBus", audio::GraphNodeType::MixBus },
         { "Utility", audio::GraphNodeType::Utility },
@@ -95,6 +98,11 @@ juce::var topologyToVar(const audio::GraphTopology& topology) {
         nodeObj->setProperty("inputs", static_cast<int>(node.inputChannelCount()));
         nodeObj->setProperty("outputs", static_cast<int>(node.outputChannelCount()));
         nodeObj->setProperty("enabled", node.enabled());
+        nodeObj->setProperty("person", juce::String(node.person()));
+        nodeObj->setProperty("role", juce::String(node.role()));
+        nodeObj->setProperty("source", juce::String(node.source()));
+        nodeObj->setProperty("profileImage", juce::String(node.profileImagePath()));
+        nodeObj->setProperty("preset", juce::String(node.presetName()));
         nodes.add(juce::var(nodeObj));
     }
 
@@ -161,6 +169,22 @@ std::shared_ptr<audio::GraphTopology> topologyFromVar(const juce::var& varGraph)
 
             const auto enabledVar = nodeVar.getProperty("enabled", juce::var(true));
             node.setEnabled(static_cast<bool>(enabledVar));
+
+            if (const auto personVar = nodeVar.getProperty("person", juce::var()); personVar.isString()) {
+                node.setPerson(personVar.toString().toStdString());
+            }
+            if (const auto roleVar = nodeVar.getProperty("role", juce::var()); roleVar.isString()) {
+                node.setRole(roleVar.toString().toStdString());
+            }
+            if (const auto sourceVar = nodeVar.getProperty("source", juce::var()); sourceVar.isString()) {
+                node.setSource(sourceVar.toString().toStdString());
+            }
+            if (const auto imageVar = nodeVar.getProperty("profileImage", juce::var()); imageVar.isString()) {
+                node.setProfileImagePath(imageVar.toString().toStdString());
+            }
+            if (const auto presetVar = nodeVar.getProperty("preset", juce::var()); presetVar.isString()) {
+                node.setPresetName(presetVar.toString().toStdString());
+            }
 
             topology->addNode(std::move(node));
         }
@@ -255,9 +279,53 @@ void microViewsFromVar(const juce::var& varMicro,
     }
 }
 
+juce::var positionPresetsToVar(const std::vector<PositionPresetState>& presets) {
+    juce::Array<juce::var> array;
+    for (const auto& preset : presets) {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty("name", juce::String(preset.name));
+        obj->setProperty("person", juce::String(preset.person));
+        obj->setProperty("role", juce::String(preset.role));
+        obj->setProperty("profileImage", juce::String(preset.profileImagePath));
+        if (preset.topology) {
+            obj->setProperty("graph", topologyToVar(*preset.topology));
+        }
+        obj->setProperty("layout", layoutMapToVar(preset.layout));
+        array.add(juce::var(obj));
+    }
+    return juce::var(array);
+}
+
+void positionPresetsFromVar(const juce::var& varPresets,
+                            std::vector<PositionPresetState>& out) {
+    out.clear();
+    if (!varPresets.isArray()) {
+        return;
+    }
+
+    for (const auto& entry : *varPresets.getArray()) {
+        if (!entry.isObject()) {
+            continue;
+        }
+        PositionPresetState preset;
+        preset.name = entry["name"].toString().toStdString();
+        preset.person = entry["person"].toString().toStdString();
+        preset.role = entry["role"].toString().toStdString();
+        preset.profileImagePath = entry["profileImage"].toString().toStdString();
+        const auto graphVar = entry["graph"];
+        if (graphVar.isObject()) {
+            preset.topology = topologyFromVar(graphVar);
+        }
+        const auto layoutVar = entry["layout"];
+        layoutMapFromVar(layoutVar, preset.layout);
+        out.push_back(std::move(preset));
+    }
+}
+
 std::shared_ptr<audio::GraphTopology> loadGraphFromFile(const fs::path& graphPath,
                                                        std::unordered_map<std::string, LayoutPosition>* macroLayout,
-                                                       std::unordered_map<std::string, MicroViewState>* microViews) {
+                                                       std::unordered_map<std::string, MicroViewState>* microViews,
+                                                       std::vector<PositionPresetState>* positionPresets = nullptr) {
     juce::File graphFile(graphPath.string());
     auto inputStream = std::unique_ptr<juce::FileInputStream>(graphFile.createInputStream());
 
@@ -299,6 +367,12 @@ std::shared_ptr<audio::GraphTopology> loadGraphFromFile(const fs::path& graphPat
         }
     }
 
+    if (positionPresets != nullptr && parsed.hasProperty("positionPresets")) {
+        positionPresetsFromVar(parsed["positionPresets"], *positionPresets);
+    } else if (positionPresets != nullptr) {
+        positionPresets->clear();
+    }
+
     return topology;
 }
 
@@ -321,6 +395,10 @@ void writeGraphToFile(const Project& project,
         root->setProperty("layout", juce::var(layoutObject));
     }
 
+    if (!project.positionPresets.empty()) {
+        root->setProperty("positionPresets", positionPresetsToVar(project.positionPresets));
+    }
+
     const auto jsonText = juce::JSON::toString(juce::var(root), true);
 
     juce::File graphFile(graphPath.string());
@@ -331,12 +409,16 @@ void writeGraphToFile(const Project& project,
 #else
 std::shared_ptr<audio::GraphTopology> loadGraphFromFile(const fs::path&,
                                                        std::unordered_map<std::string, LayoutPosition>* macroLayout,
-                                                       std::unordered_map<std::string, MicroViewState>* microViews) {
+                                                       std::unordered_map<std::string, MicroViewState>* microViews,
+                                                       std::vector<PositionPresetState>* positionPresets) {
     if (macroLayout != nullptr) {
         macroLayout->clear();
     }
     if (microViews != nullptr) {
         microViews->clear();
+    }
+    if (positionPresets != nullptr) {
+        positionPresets->clear();
     }
     return nullptr;
 }
@@ -404,6 +486,19 @@ void writeGraphToFile(const Project& project,
             out << "    }\n";
         }
         out << "  }\n";
+    }
+
+    if (!project.positionPresets.empty()) {
+        out << "  ,\n  \"positionPresets\": [\n";
+        for (std::size_t i = 0; i < project.positionPresets.size(); ++i) {
+            const auto& preset = project.positionPresets[i];
+            out << "    {\"name\": \"" << preset.name
+                << "\", \"person\": \"" << preset.person
+                << "\", \"role\": \"" << preset.role
+                << "\", \"profileImage\": \"" << preset.profileImagePath << "\"}";
+            out << (i + 1 == project.positionPresets.size() ? "\n" : ",\n");
+        }
+        out << "  ]\n";
     }
 
     out << "}\n";
@@ -519,7 +614,7 @@ Project ProjectSerializer::load(const std::string& path) {
     std::shared_ptr<audio::GraphTopology> topology;
 
     if (fs::exists(graphPath)) {
-        topology = loadGraphFromFile(graphPath, &project.macroLayout, &project.microViews);
+        topology = loadGraphFromFile(graphPath, &project.macroLayout, &project.microViews, &project.positionPresets);
     }
 
     if (!topology) {

@@ -11,6 +11,7 @@ enum class GraphNodeType {
     Input,
     Channel,
     GroupBus,
+    Position,
     BroadcastBus,
     MixBus,
     Utility,
@@ -35,6 +36,16 @@ public:
 
     void setLabel(std::string_view label);
     [[nodiscard]] const std::string& label() const noexcept;
+    void setPerson(std::string_view person);
+    [[nodiscard]] const std::string& person() const noexcept;
+    void setRole(std::string_view role);
+    [[nodiscard]] const std::string& role() const noexcept;
+    void setSource(std::string_view source);
+    [[nodiscard]] const std::string& source() const noexcept;
+    void setProfileImagePath(std::string_view path);
+    [[nodiscard]] const std::string& profileImagePath() const noexcept;
+    void setPresetName(std::string_view preset);
+    [[nodiscard]] const std::string& presetName() const noexcept;
 
     void addInputChannel();
     void addOutputChannel();
@@ -52,6 +63,11 @@ private:
     std::uint32_t inputChannels_ { 0 };
     std::uint32_t outputChannels_ { 0 };
     bool enabled_ { true };
+    std::string person_;
+    std::string role_;
+    std::string source_;
+    std::string profileImagePath_;
+    std::string presetName_;
 };
 
 using GraphNodeList = std::vector<GraphNode>;

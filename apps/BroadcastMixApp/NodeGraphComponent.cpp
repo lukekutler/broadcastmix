@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cctype>
+#include <sstream>
 #include <unordered_set>
 #include <iostream>
 
@@ -17,6 +19,51 @@ constexpr float kVerticalPadding = 36.0F;
 constexpr float kPortRadius = 5.0F;
 constexpr float kPortHitRadius = 9.0F;
 constexpr float kConnectionDropTolerance = 12.0F;
+
+std::string initialsFromName(const std::string& name) {
+    std::string initials;
+    std::istringstream stream(name);
+    std::string word;
+    while (stream >> word && initials.size() < 2) {
+        for (char ch : word) {
+            if (std::isalpha(static_cast<unsigned char>(ch))) {
+                initials.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+                break;
+            }
+        }
+    }
+    if (initials.empty()) {
+        for (char ch : name) {
+            if (std::isalpha(static_cast<unsigned char>(ch))) {
+                initials.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+                break;
+            }
+        }
+    }
+    if (initials.size() == 1) {
+        for (auto it = name.rbegin(); it != name.rend(); ++it) {
+            if (std::isalpha(static_cast<unsigned char>(*it))) {
+                initials.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(*it))));
+                break;
+            }
+        }
+    }
+    if (initials.size() > 2) {
+        initials.resize(2);
+    }
+    return initials;
+}
+
+juce::Image loadAvatarImage(const std::string& path) {
+    if (path.empty()) {
+        return {};
+    }
+    juce::File file { juce::String(path) };
+    if (!file.existsAsFile()) {
+        return {};
+    }
+    return juce::ImageCache::getFromFile(file);
+}
 } // namespace
 
 NodeGraphComponent::NodeGraphComponent(ui::NodeGraphView* view)
@@ -138,12 +185,72 @@ void NodeGraphComponent::paint(juce::Graphics& g) {
             renameEditor_->setBounds(labelBounds.toNearestInt());
         }
         const bool isRenamingNode = renameEditor_ && renamingNodeId_ == nodeVisual.id;
-        g.setFont(juce::Font(juce::FontOptions { 15.0F, juce::Font::bold }));
+        const bool isPositionNode = nodeVisual.type == audio::GraphNodeType::Position;
         if (!isRenamingNode) {
-            g.drawFittedText(nodeVisual.label,
-                             labelBounds.toNearestInt(),
-                             juce::Justification::centred,
-                             1);
+            if (isPositionNode) {
+                const juce::String personText(nodeVisual.person.empty() ? nodeVisual.label : nodeVisual.person);
+                const juce::String roleText(nodeVisual.role);
+                auto textBounds = labelBounds.toNearestInt();
+
+                const float avatarDiameter = 28.0F;
+                juce::Rectangle<float> avatarBounds(labelBounds.getX(), labelBounds.getY(), avatarDiameter, avatarDiameter);
+                const auto accentColour = toColour(theme.accent);
+                g.setColour(accentColour.withAlpha(0.25F));
+                g.fillEllipse(avatarBounds);
+
+                if (!nodeVisual.profileImagePath.empty()) {
+                    const auto avatarImage = loadAvatarImage(nodeVisual.profileImagePath);
+                    if (avatarImage.isValid()) {
+                        juce::Graphics::ScopedSaveState stateAvatar(g);
+                        juce::Path clip;
+                        clip.addEllipse(avatarBounds);
+                        g.reduceClipRegion(clip);
+                        g.drawImageWithin(avatarImage,
+                                          static_cast<int>(std::floor(avatarBounds.getX())),
+                                          static_cast<int>(std::floor(avatarBounds.getY())),
+                                          static_cast<int>(std::round(avatarBounds.getWidth())),
+                                          static_cast<int>(std::round(avatarBounds.getHeight())),
+                                          juce::RectanglePlacement::fillDestination);
+                    }
+                } else {
+                    const auto initials = initialsFromName(nodeVisual.person.empty() ? nodeVisual.label : nodeVisual.person);
+                    if (!initials.empty()) {
+                        g.setColour(toColour(theme.textPrimary));
+                        g.setFont(juce::Font(juce::FontOptions { avatarDiameter * 0.45F, juce::Font::bold }));
+                        g.drawFittedText(juce::String(initials),
+                                         avatarBounds.toNearestInt(),
+                                         juce::Justification::centred,
+                                         1);
+                    }
+                }
+                g.setColour(accentColour);
+                g.drawEllipse(avatarBounds, 1.4F);
+
+                textBounds.removeFromLeft(static_cast<int>(avatarDiameter) + 12);
+                auto nameBounds = textBounds.removeFromTop(28);
+                g.setColour(toColour(theme.textPrimary));
+                g.setFont(juce::Font(juce::FontOptions { 18.0F, juce::Font::bold }));
+                g.drawFittedText(personText.isNotEmpty() ? personText : juce::String(nodeVisual.label),
+                                 nameBounds,
+                                 juce::Justification::centredLeft,
+                                 1);
+                if (roleText.isNotEmpty()) {
+                    textBounds.removeFromTop(4);
+                    g.setColour(toColour(theme.textPrimary).withAlpha(0.75F));
+                    g.setFont(juce::Font(juce::FontOptions { 13.0F, juce::Font::plain }));
+                    g.drawFittedText(roleText,
+                                     textBounds.removeFromTop(20),
+                                     juce::Justification::centredLeft,
+                                     1);
+                    g.setColour(toColour(theme.textPrimary));
+                }
+            } else {
+                g.setFont(juce::Font(juce::FontOptions { 15.0F, juce::Font::bold }));
+                g.drawFittedText(nodeVisual.label,
+                                 labelBounds.toNearestInt(),
+                                 juce::Justification::centred,
+                                 1);
+            }
         }
 
         if (selectedNodeId_ && *selectedNodeId_ == nodeVisual.id) {
@@ -939,6 +1046,8 @@ juce::Colour NodeGraphComponent::nodeFillColour(audio::GraphNodeType type) const
         return base;
     case audio::GraphNodeType::GroupBus:
         return base.darker(0.1F);
+    case audio::GraphNodeType::Position:
+        return base.darker(0.05F);
     case audio::GraphNodeType::BroadcastBus:
         return base.darker(0.25F);
     case audio::GraphNodeType::MixBus:

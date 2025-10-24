@@ -30,6 +30,11 @@ public:
         bool enabled { true };
         std::uint32_t inputChannels { 0 };
         std::uint32_t outputChannels { 0 };
+        std::string person;
+        std::string role;
+        std::string source;
+        std::string profileImagePath;
+        std::string preset;
     };
 
     struct ConnectionVisual {

@@ -26,6 +26,11 @@ public:
     void setNodeLabel(const std::string& id, std::string_view label);
     void setNodeEnabled(const std::string& id, bool enabled);
     [[nodiscard]] bool isNodeEnabled(const std::string& id) const;
+    void setNodePerson(const std::string& id, std::string_view person);
+    void setNodeRole(const std::string& id, std::string_view role);
+    void setNodeSource(const std::string& id, std::string_view source);
+    void setNodeProfileImagePath(const std::string& id, std::string_view path);
+    void setNodePresetName(const std::string& id, std::string_view preset);
     [[nodiscard]] bool connectionExists(const std::string& fromId,
                                         const std::string& toId,
                                         std::uint32_t fromChannel,

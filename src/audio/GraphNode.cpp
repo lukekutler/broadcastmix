@@ -17,11 +17,58 @@ GraphNodeType GraphNode::type() const noexcept {
 }
 
 void GraphNode::setLabel(std::string_view label) {
+    const bool shouldSyncPerson = (type_ == GraphNodeType::Position) && (person_.empty() || person_ == label_);
     label_ = label;
+    if (shouldSyncPerson) {
+        person_ = label_;
+    }
 }
 
 const std::string& GraphNode::label() const noexcept {
     return label_;
+}
+
+void GraphNode::setPerson(std::string_view person) {
+    person_ = person;
+    if (type_ == GraphNodeType::Position) {
+        label_ = person_;
+    }
+}
+
+const std::string& GraphNode::person() const noexcept {
+    return person_.empty() ? label_ : person_;
+}
+
+void GraphNode::setRole(std::string_view role) {
+    role_ = role;
+}
+
+const std::string& GraphNode::role() const noexcept {
+    return role_;
+}
+
+void GraphNode::setSource(std::string_view source) {
+    source_ = source;
+}
+
+const std::string& GraphNode::source() const noexcept {
+    return source_;
+}
+
+void GraphNode::setProfileImagePath(std::string_view path) {
+    profileImagePath_ = path;
+}
+
+const std::string& GraphNode::profileImagePath() const noexcept {
+    return profileImagePath_;
+}
+
+void GraphNode::setPresetName(std::string_view preset) {
+    presetName_ = preset;
+}
+
+const std::string& GraphNode::presetName() const noexcept {
+    return presetName_;
 }
 
 void GraphNode::addInputChannel() {

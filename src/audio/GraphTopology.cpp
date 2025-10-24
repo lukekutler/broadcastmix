@@ -78,6 +78,46 @@ void GraphTopology::setNodeLabel(const std::string& id, std::string_view label) 
     nodes_[it->second].setLabel(label);
 }
 
+void GraphTopology::setNodePerson(const std::string& id, std::string_view person) {
+    const auto it = nodeIndex_.find(id);
+    if (it == nodeIndex_.end()) {
+        return;
+    }
+    nodes_[it->second].setPerson(person);
+}
+
+void GraphTopology::setNodeRole(const std::string& id, std::string_view role) {
+    const auto it = nodeIndex_.find(id);
+    if (it == nodeIndex_.end()) {
+        return;
+    }
+    nodes_[it->second].setRole(role);
+}
+
+void GraphTopology::setNodeSource(const std::string& id, std::string_view source) {
+    const auto it = nodeIndex_.find(id);
+    if (it == nodeIndex_.end()) {
+        return;
+    }
+    nodes_[it->second].setSource(source);
+}
+
+void GraphTopology::setNodeProfileImagePath(const std::string& id, std::string_view path) {
+    const auto it = nodeIndex_.find(id);
+    if (it == nodeIndex_.end()) {
+        return;
+    }
+    nodes_[it->second].setProfileImagePath(path);
+}
+
+void GraphTopology::setNodePresetName(const std::string& id, std::string_view preset) {
+    const auto it = nodeIndex_.find(id);
+    if (it == nodeIndex_.end()) {
+        return;
+    }
+    nodes_[it->second].setPresetName(preset);
+}
+
 bool GraphTopology::setNodeChannelCounts(const std::string& id, std::uint32_t inputChannels, std::uint32_t outputChannels) {
     const auto it = nodeIndex_.find(id);
     if (it == nodeIndex_.end()) {

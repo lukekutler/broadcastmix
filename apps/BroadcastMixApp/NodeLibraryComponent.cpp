@@ -32,6 +32,7 @@ NodeLibraryComponent::NodeLibraryComponent() {
         { "channel", "Channel", "Main signal path" },
         { "output", "Output", "Stereo destination" },
         { "group", "Group", "Mix bus" },
+        { "position", "Position", "Performer setup" },
         { "effect", "Effect", "Processing node" }
     };
 

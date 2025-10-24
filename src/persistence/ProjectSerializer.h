@@ -21,6 +21,15 @@ struct MicroViewState {
     std::unordered_map<std::string, LayoutPosition> layout;
 };
 
+struct PositionPresetState {
+    std::string name;
+    std::string person;
+    std::string role;
+    std::string profileImagePath;
+    std::shared_ptr<audio::GraphTopology> topology;
+    std::unordered_map<std::string, LayoutPosition> layout;
+};
+
 struct Project {
     std::string name;
     std::shared_ptr<audio::GraphTopology> graphTopology;
@@ -28,6 +37,7 @@ struct Project {
     std::optional<std::string> lastAutosavePath;
     std::unordered_map<std::string, LayoutPosition> macroLayout;
     std::unordered_map<std::string, MicroViewState> microViews;
+    std::vector<PositionPresetState> positionPresets;
 };
 
 class ProjectSerializer {

@@ -228,15 +228,30 @@ void NodeGraphView::rebuildLayout() {
         auto& columnNodes = columns[columnIdx];
         for (std::size_t rowIndex = 0; rowIndex < columnNodes.size(); ++rowIndex) {
             const auto* node = columnNodes[rowIndex];
+            auto displayLabel = node->label().empty() ? node->id() : node->label();
+            const auto person = node->person();
+            const auto role = node->role();
+            const auto source = node->source();
+            const auto profileImage = node->profileImagePath();
+            const auto preset = node->presetName();
+            if (node->type() == audio::GraphNodeType::Position && !person.empty()) {
+                displayLabel = person;
+            }
+
             NodeVisual visual {
                 .id = node->id(),
-                .label = node->label().empty() ? node->id() : node->label(),
+                .label = displayLabel,
                 .type = node->type(),
                 .normX = x,
                 .normY = normalisedCoordinate(rowIndex, columnNodes.size()),
                 .enabled = node->enabled(),
                 .inputChannels = std::min<std::uint32_t>(node->inputChannelCount(), 2U),
-                .outputChannels = std::min<std::uint32_t>(node->outputChannelCount(), 2U)
+                .outputChannels = std::min<std::uint32_t>(node->outputChannelCount(), 2U),
+                .person = person,
+                .role = role,
+                .source = source,
+                .profileImagePath = profileImage,
+                .preset = preset
             };
             xPositions.emplace(visual.id, x);
             nodes_.push_back(std::move(visual));
