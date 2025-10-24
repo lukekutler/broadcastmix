@@ -137,11 +137,14 @@ void NodeGraphComponent::paint(juce::Graphics& g) {
         if (renameEditor_ && renamingNodeId_ == nodeVisual.id) {
             renameEditor_->setBounds(labelBounds.toNearestInt());
         }
+        const bool isRenamingNode = renameEditor_ && renamingNodeId_ == nodeVisual.id;
         g.setFont(juce::Font(juce::FontOptions { 15.0F, juce::Font::bold }));
-        g.drawFittedText(nodeVisual.label,
-                         labelBounds.toNearestInt(),
-                         juce::Justification::centred,
-                         1);
+        if (!isRenamingNode) {
+            g.drawFittedText(nodeVisual.label,
+                             labelBounds.toNearestInt(),
+                             juce::Justification::centred,
+                             1);
+        }
 
         if (selectedNodeId_ && *selectedNodeId_ == nodeVisual.id) {
             g.setColour(toColour(theme.accent));
@@ -1083,7 +1086,7 @@ void NodeGraphComponent::beginInlineRename(const std::string& nodeId, const juce
     editor->setIndents(2, 2);
     editor->setReturnKeyStartsNewLine(false);
     editor->setJustification(juce::Justification::centred);
-    editor->setColour(juce::TextEditor::backgroundColourId, juce::Colour::fromFloatRGBA(0.0F, 0.0F, 0.0F, 0.2F));
+    editor->setColour(juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
     editor->setColour(juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
     editor->setColour(juce::TextEditor::focusedOutlineColourId, toColour(view_->theme().accent));
     editor->setColour(juce::TextEditor::textColourId, toColour(view_->theme().textPrimary));

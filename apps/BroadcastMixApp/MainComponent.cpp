@@ -510,13 +510,15 @@ void MainComponent::navigateToBreadcrumbIndex(int index) {
 
     const auto clampedIndex = std::min(index, static_cast<int>(breadcrumbStack_.size()));
 
-    switchToMacroView();
-
     std::vector<std::pair<std::string, std::string>> path;
     path.reserve(static_cast<std::size_t>(clampedIndex));
-
     for (int i = 0; i < clampedIndex; ++i) {
-        const auto& entry = breadcrumbStack_[static_cast<std::size_t>(i)];
+        path.emplace_back(breadcrumbStack_[static_cast<std::size_t>(i)]);
+    }
+
+    switchToMacroView();
+
+    for (const auto& entry : path) {
         auto descriptor = app_.microViewDescriptor(entry.first);
         switchToMicroView(entry.first, entry.second, descriptor);
     }
@@ -546,7 +548,8 @@ void MainComponent::refreshBreadcrumbBar() {
     auto textColour = toColour(theme.textPrimary);
 
     for (int i = 0; i < static_cast<int>(path.size()); ++i) {
-        auto* button = breadcrumbButtons_.add(new juce::TextButton(path[static_cast<std::size_t>(i)].second));
+        const juce::String buttonText(path[static_cast<std::size_t>(i)].second);
+        auto* button = breadcrumbButtons_.add(new juce::TextButton(buttonText));
         button->setClickingTogglesState(false);
         button->setColour(juce::TextButton::buttonColourId, pillColour);
         button->setColour(juce::TextButton::buttonOnColourId, pillColourPressed);
