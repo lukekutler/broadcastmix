@@ -37,8 +37,8 @@ std::string nodeTypeToString(audio::GraphNodeType type) {
         return "Channel";
     case audio::GraphNodeType::GroupBus:
         return "GroupBus";
-    case audio::GraphNodeType::Position:
-        return "Position";
+    case audio::GraphNodeType::Person:
+        return "Person";
     case audio::GraphNodeType::BroadcastBus:
         return "BroadcastBus";
     case audio::GraphNodeType::MixBus:
@@ -61,7 +61,8 @@ std::optional<audio::GraphNodeType> nodeTypeFromString(const std::string& type) 
         { "Input", audio::GraphNodeType::Input },
         { "Channel", audio::GraphNodeType::Channel },
         { "GroupBus", audio::GraphNodeType::GroupBus },
-        { "Position", audio::GraphNodeType::Position },
+        { "Person", audio::GraphNodeType::Person },
+        { "Position", audio::GraphNodeType::Person },
         { "BroadcastBus", audio::GraphNodeType::BroadcastBus },
         { "MixBus", audio::GraphNodeType::MixBus },
         { "Utility", audio::GraphNodeType::Utility },
@@ -279,7 +280,7 @@ void microViewsFromVar(const juce::var& varMicro,
     }
 }
 
-juce::var positionPresetsToVar(const std::vector<PositionPresetState>& presets) {
+juce::var personPresetsToVar(const std::vector<PersonPresetState>& presets) {
     juce::Array<juce::var> array;
     for (const auto& preset : presets) {
         auto* obj = new juce::DynamicObject();
@@ -296,8 +297,8 @@ juce::var positionPresetsToVar(const std::vector<PositionPresetState>& presets) 
     return juce::var(array);
 }
 
-void positionPresetsFromVar(const juce::var& varPresets,
-                            std::vector<PositionPresetState>& out) {
+void personPresetsFromVar(const juce::var& varPresets,
+                            std::vector<PersonPresetState>& out) {
     out.clear();
     if (!varPresets.isArray()) {
         return;
@@ -307,7 +308,7 @@ void positionPresetsFromVar(const juce::var& varPresets,
         if (!entry.isObject()) {
             continue;
         }
-        PositionPresetState preset;
+        PersonPresetState preset;
         preset.name = entry["name"].toString().toStdString();
         preset.person = entry["person"].toString().toStdString();
         preset.role = entry["role"].toString().toStdString();
@@ -325,7 +326,7 @@ void positionPresetsFromVar(const juce::var& varPresets,
 std::shared_ptr<audio::GraphTopology> loadGraphFromFile(const fs::path& graphPath,
                                                        std::unordered_map<std::string, LayoutPosition>* macroLayout,
                                                        std::unordered_map<std::string, MicroViewState>* microViews,
-                                                       std::vector<PositionPresetState>* positionPresets = nullptr) {
+                                                       std::vector<PersonPresetState>* personPresets = nullptr) {
     juce::File graphFile(graphPath.string());
     auto inputStream = std::unique_ptr<juce::FileInputStream>(graphFile.createInputStream());
 
@@ -367,10 +368,14 @@ std::shared_ptr<audio::GraphTopology> loadGraphFromFile(const fs::path& graphPat
         }
     }
 
-    if (positionPresets != nullptr && parsed.hasProperty("positionPresets")) {
-        positionPresetsFromVar(parsed["positionPresets"], *positionPresets);
-    } else if (positionPresets != nullptr) {
-        positionPresets->clear();
+    if (personPresets != nullptr) {
+        if (parsed.hasProperty("personPresets")) {
+            personPresetsFromVar(parsed["personPresets"], *personPresets);
+        } else if (parsed.hasProperty("positionPresets")) {
+            personPresetsFromVar(parsed["positionPresets"], *personPresets);
+        } else {
+            personPresets->clear();
+        }
     }
 
     return topology;
@@ -395,8 +400,8 @@ void writeGraphToFile(const Project& project,
         root->setProperty("layout", juce::var(layoutObject));
     }
 
-    if (!project.positionPresets.empty()) {
-        root->setProperty("positionPresets", positionPresetsToVar(project.positionPresets));
+    if (!project.personPresets.empty()) {
+        root->setProperty("personPresets", personPresetsToVar(project.personPresets));
     }
 
     const auto jsonText = juce::JSON::toString(juce::var(root), true);
@@ -410,15 +415,15 @@ void writeGraphToFile(const Project& project,
 std::shared_ptr<audio::GraphTopology> loadGraphFromFile(const fs::path&,
                                                        std::unordered_map<std::string, LayoutPosition>* macroLayout,
                                                        std::unordered_map<std::string, MicroViewState>* microViews,
-                                                       std::vector<PositionPresetState>* positionPresets) {
+                                                       std::vector<PersonPresetState>* personPresets) {
     if (macroLayout != nullptr) {
         macroLayout->clear();
     }
     if (microViews != nullptr) {
         microViews->clear();
     }
-    if (positionPresets != nullptr) {
-        positionPresets->clear();
+    if (personPresets != nullptr) {
+        personPresets->clear();
     }
     return nullptr;
 }
@@ -488,15 +493,15 @@ void writeGraphToFile(const Project& project,
         out << "  }\n";
     }
 
-    if (!project.positionPresets.empty()) {
-        out << "  ,\n  \"positionPresets\": [\n";
-        for (std::size_t i = 0; i < project.positionPresets.size(); ++i) {
-            const auto& preset = project.positionPresets[i];
+    if (!project.personPresets.empty()) {
+        out << "  ,\n  \"personPresets\": [\n";
+        for (std::size_t i = 0; i < project.personPresets.size(); ++i) {
+            const auto& preset = project.personPresets[i];
             out << "    {\"name\": \"" << preset.name
                 << "\", \"person\": \"" << preset.person
                 << "\", \"role\": \"" << preset.role
                 << "\", \"profileImage\": \"" << preset.profileImagePath << "\"}";
-            out << (i + 1 == project.positionPresets.size() ? "\n" : ",\n");
+            out << (i + 1 == project.personPresets.size() ? "\n" : ",\n");
         }
         out << "  ]\n";
     }
@@ -614,7 +619,7 @@ Project ProjectSerializer::load(const std::string& path) {
     std::shared_ptr<audio::GraphTopology> topology;
 
     if (fs::exists(graphPath)) {
-        topology = loadGraphFromFile(graphPath, &project.macroLayout, &project.microViews, &project.positionPresets);
+        topology = loadGraphFromFile(graphPath, &project.macroLayout, &project.microViews, &project.personPresets);
     }
 
     if (!topology) {

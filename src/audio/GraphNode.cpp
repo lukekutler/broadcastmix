@@ -17,7 +17,7 @@ GraphNodeType GraphNode::type() const noexcept {
 }
 
 void GraphNode::setLabel(std::string_view label) {
-    const bool shouldSyncPerson = (type_ == GraphNodeType::Position) && (person_.empty() || person_ == label_);
+    const bool shouldSyncPerson = (type_ == GraphNodeType::Person) && (person_.empty() || person_ == label_);
     label_ = label;
     if (shouldSyncPerson) {
         person_ = label_;
@@ -30,7 +30,7 @@ const std::string& GraphNode::label() const noexcept {
 
 void GraphNode::setPerson(std::string_view person) {
     person_ = person;
-    if (type_ == GraphNodeType::Position) {
+    if (type_ == GraphNodeType::Person) {
         label_ = person_;
     }
 }

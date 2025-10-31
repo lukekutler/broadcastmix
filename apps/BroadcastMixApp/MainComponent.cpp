@@ -100,9 +100,6 @@ void MainComponent::AvatarComponent::paint(juce::Graphics& g) {
     const float diameter = std::min(bounds.getWidth(), bounds.getHeight());
     auto circle = juce::Rectangle<float>(0.0F, 0.0F, diameter, diameter).withCentre(bounds.getCentre());
 
-    g.setColour(fillColour_);
-    g.fillEllipse(circle);
-
     if (image_.isValid()) {
         juce::Graphics::ScopedSaveState state(g);
         juce::Path clip;
@@ -114,14 +111,18 @@ void MainComponent::AvatarComponent::paint(juce::Graphics& g) {
                           static_cast<int>(std::round(circle.getWidth())),
                           static_cast<int>(std::round(circle.getHeight())),
                           juce::RectanglePlacement::fillDestination);
-    } else if (initials_.isNotEmpty()) {
-        g.setColour(textColour_);
-        const float fontHeight = diameter * 0.45F;
-        g.setFont(juce::Font(juce::FontOptions { fontHeight, juce::Font::bold }));
-        g.drawFittedText(initials_,
-                         circle.toNearestInt(),
-                         juce::Justification::centred,
-                         1);
+    } else {
+        g.setColour(fillColour_);
+        g.fillEllipse(circle);
+        if (initials_.isNotEmpty()) {
+            g.setColour(textColour_);
+            const float fontHeight = diameter * 0.45F;
+            g.setFont(juce::Font(juce::FontOptions { fontHeight, juce::Font::bold }));
+            g.drawFittedText(initials_,
+                             circle.toNearestInt(),
+                             juce::Justification::centred,
+                             1);
+        }
     }
 
     g.setColour(outlineColour_);
@@ -169,7 +170,11 @@ MainComponent::MainComponent(core::Application& app)
     addAndMakeVisible(breadcrumbs_);
     addAndMakeVisible(backButton_);
     addAndMakeVisible(nodeLibrary_);
-    addAndMakeVisible(graphComponent_);
+    graphViewport_.setViewedComponent(&graphComponent_, false);
+    graphViewport_.setScrollBarsShown(true, true, true, true);
+    graphViewport_.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::nonHover);
+    graphComponent_.setViewportIgnoreDragFlag(true);
+    addAndMakeVisible(graphViewport_);
     addAndMakeVisible(setupGroup_);
     addAndMakeVisible(inputLabel_);
     addAndMakeVisible(inputFormatBox_);
@@ -230,7 +235,7 @@ MainComponent::MainComponent(core::Application& app)
     chooseImageButton_.onClick = [this]() { chooseProfileImage(); };
     clearImageButton_.onClick = [this]() { clearProfileImage(); };
     clearImageButton_.setEnabled(false);
-    savePresetButton_.onClick = [this]() { saveCurrentPositionPreset(); };
+    savePresetButton_.onClick = [this]() { saveCurrentPersonPreset(); };
 
     const auto& theme = app_.nodeGraphView().theme();
     const auto fill = toColour(theme.accent).withAlpha(0.25F);
@@ -279,11 +284,11 @@ void MainComponent::resized() {
     const int idealLibraryWidth = juce::jlimit(200, 260, area.getWidth() / 3);
     const int libraryWidth = std::min(area.getWidth(), idealLibraryWidth);
     auto libraryArea = area.removeFromLeft(libraryWidth);
-    const bool showPositionControls = personEditor_.isVisible();
+    const bool showPersonControls = personEditor_.isVisible();
     const bool showAudioControls = inputFormatBox_.isVisible() || outputFormatBox_.isVisible();
     int setupHeight = 0;
     if (setupGroup_.isVisible()) {
-        if (showPositionControls) {
+        if (showPersonControls) {
             setupHeight = 260;
         } else if (showAudioControls) {
             setupHeight = 140;
@@ -295,7 +300,7 @@ void MainComponent::resized() {
         setupGroup_.setBounds(configArea);
         auto content = configArea.reduced(12);
 
-        if (showPositionControls) {
+        if (showPersonControls) {
             inputLabel_.setBounds({});
             inputFormatBox_.setBounds({});
             outputLabel_.setBounds({});
@@ -394,7 +399,9 @@ void MainComponent::resized() {
 
     nodeLibrary_.setBounds(libraryArea);
     area.removeFromLeft(16);
-    graphComponent_.setBounds(area);
+    graphViewport_.setBounds(area);
+    graphComponent_.setSize(std::max(graphComponent_.contentWidth(), area.getWidth()),
+                            std::max(graphComponent_.contentHeight(), area.getHeight()));
 }
 
 juce::Colour MainComponent::toColour(const ui::Color& color) const {
@@ -608,7 +615,7 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
     if ((macroType == audio::GraphNodeType::Channel || macroType == audio::GraphNodeType::Output) && inputExists) {
         fixedInput = channelInputId;
     }
-    if ((macroType == audio::GraphNodeType::Channel || macroType == audio::GraphNodeType::GroupBus || macroType == audio::GraphNodeType::Position || macroType == audio::GraphNodeType::Output) && outputExists) {
+    if ((macroType == audio::GraphNodeType::Channel || macroType == audio::GraphNodeType::GroupBus || macroType == audio::GraphNodeType::Person || macroType == audio::GraphNodeType::Output) && outputExists) {
         fixedOutput = channelOutputId;
     }
 
@@ -664,6 +671,20 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
     }
     graphComponent_.setFixedEndpoints(fixedInput, fixedOutput);
 
+    if (macroType == audio::GraphNodeType::Person) {
+        juce::Component::SafePointer<juce::Viewport> safeViewport(&graphViewport_);
+        juce::Component::SafePointer<NodeGraphComponent> safeGraph(&graphComponent_);
+        juce::MessageManager::callAsync([safeViewport, safeGraph]() mutable {
+            if (safeViewport == nullptr || safeGraph == nullptr) {
+                return;
+            }
+            const int desiredX = std::max(0, safeGraph->contentWidth() - safeViewport->getViewWidth());
+            safeViewport->setViewPosition(desiredX, 0);
+        });
+    } else {
+        graphViewport_.setViewPosition(0, 0);
+    }
+
     updateBreadcrumbs();
     selectedNode_.reset();
     graphComponent_.grabKeyboardFocus();
@@ -717,6 +738,7 @@ void MainComponent::switchToMacroView() {
         }
     });
     graphComponent_.setFixedEndpoints(std::nullopt, std::nullopt);
+    graphViewport_.setViewPosition(0, 0);
     nodeLibrary_.setTheme(app_.nodeGraphView().theme());
     updateBreadcrumbs();
     selectedNode_.reset();
@@ -881,7 +903,7 @@ void MainComponent::refreshSetupPanel() {
         clearImageButton_.setVisible(false);
         clearImageButton_.setEnabled(false);
         currentProfileImagePath_.clear();
-    } else if (nodeType == audio::GraphNodeType::Position) {
+    } else if (nodeType == audio::GraphNodeType::Person) {
         setupGroup_.setVisible(true);
 
         inputLabel_.setVisible(false);
@@ -906,7 +928,7 @@ void MainComponent::refreshSetupPanel() {
 
         presetBox_.clear(juce::dontSendNotification);
         presetBox_.addItem("Custom", 1);
-        const auto presets = app_.positionPresetNames();
+        const auto presets = app_.personPresetNames();
         int itemId = 2;
         int selectedId = 1;
         for (const auto& presetName : presets) {
@@ -967,13 +989,14 @@ void MainComponent::applyPersonUpdate() {
         return;
     }
     const auto nodeType = app_.nodeTypeForId(*selectedNode_);
-    if (!nodeType || *nodeType != audio::GraphNodeType::Position) {
+    if (!nodeType || *nodeType != audio::GraphNodeType::Person) {
         return;
     }
     const auto text = personEditor_.getText();
-    if (app_.updatePositionPerson(*selectedNode_, text.toStdString())) {
+    if (app_.updatePersonName(*selectedNode_, text.toStdString())) {
         presetBox_.setSelectedId(1, juce::dontSendNotification);
         updateBreadcrumbs();
+        refreshActiveGraphView();
         if (currentMicro_ && currentMicro_->id == *selectedNode_) {
             currentMicro_->label = text.toStdString();
         }
@@ -985,12 +1008,13 @@ void MainComponent::applyRoleUpdate() {
         return;
     }
     const auto nodeType = app_.nodeTypeForId(*selectedNode_);
-    if (!nodeType || *nodeType != audio::GraphNodeType::Position) {
+    if (!nodeType || *nodeType != audio::GraphNodeType::Person) {
         return;
     }
     const auto text = roleEditor_.getText();
-    if (app_.updatePositionRole(*selectedNode_, text.toStdString(), false)) {
+    if (app_.updatePersonRole(*selectedNode_, text.toStdString(), false)) {
         presetBox_.setSelectedId(1, juce::dontSendNotification);
+        refreshActiveGraphView();
     }
 }
 
@@ -999,7 +1023,7 @@ void MainComponent::chooseProfileImage() {
         return;
     }
     const auto nodeType = app_.nodeTypeForId(*selectedNode_);
-    if (!nodeType || *nodeType != audio::GraphNodeType::Position) {
+    if (!nodeType || *nodeType != audio::GraphNodeType::Person) {
         return;
     }
 
@@ -1023,8 +1047,9 @@ void MainComponent::chooseProfileImage() {
                                  if (!selectedNode_ || *selectedNode_ != nodeId) {
                                      return;
                                  }
-                                 if (app_.updatePositionProfileImage(nodeId, file.getFullPathName().toStdString(), false)) {
+                                 if (app_.updatePersonProfileImage(nodeId, file.getFullPathName().toStdString(), false)) {
                                      presetBox_.setSelectedId(1, juce::dontSendNotification);
+                                     refreshActiveGraphView();
                                      refreshSetupPanel();
                                  }
                              });
@@ -1035,24 +1060,40 @@ void MainComponent::clearProfileImage() {
         return;
     }
     const auto nodeType = app_.nodeTypeForId(*selectedNode_);
-    if (!nodeType || *nodeType != audio::GraphNodeType::Position) {
+    if (!nodeType || *nodeType != audio::GraphNodeType::Person) {
         return;
     }
 
-    if (app_.updatePositionProfileImage(*selectedNode_, std::string {}, false)) {
+    if (app_.updatePersonProfileImage(*selectedNode_, std::string {}, false)) {
         presetBox_.setSelectedId(1, juce::dontSendNotification);
+        refreshActiveGraphView();
         refreshSetupPanel();
     } else if (!currentProfileImagePath_.empty()) {
         refreshSetupPanel();
     }
 }
 
-void MainComponent::saveCurrentPositionPreset() {
+void MainComponent::refreshActiveGraphView() {
+    if (!currentMicro_) {
+        return;
+    }
+
+    auto descriptor = app_.microViewDescriptor(currentMicro_->id);
+    if (!descriptor.topology) {
+        return;
+    }
+
+    currentMicro_->view->setPositionOverrides(buildOverrides(descriptor.layout));
+    currentMicro_->view->setTopology(descriptor.topology);
+    graphComponent_.repaint();
+}
+
+void MainComponent::saveCurrentPersonPreset() {
     if (!selectedNode_) {
         return;
     }
     const auto nodeType = app_.nodeTypeForId(*selectedNode_);
-    if (!nodeType || *nodeType != audio::GraphNodeType::Position) {
+    if (!nodeType || *nodeType != audio::GraphNodeType::Person) {
         return;
     }
 
@@ -1079,7 +1120,7 @@ void MainComponent::saveCurrentPositionPreset() {
             if (presetName.isEmpty()) {
                 return;
             }
-            if (safeThis->app_.savePositionPreset(*safeThis->selectedNode_, presetName.toStdString())) {
+            if (safeThis->app_.savePersonPreset(*safeThis->selectedNode_, presetName.toStdString())) {
                 safeThis->refreshSetupPanel();
             }
         }),
@@ -1175,8 +1216,8 @@ std::optional<core::Application::NodeTemplate> MainComponent::templateForLibrary
     if (normalised == "group") {
         return core::Application::NodeTemplate::Group;
     }
-    if (normalised == "position") {
-        return core::Application::NodeTemplate::Position;
+    if (normalised == "person") {
+        return core::Application::NodeTemplate::Person;
     }
     if (normalised == "effect") {
         return core::Application::NodeTemplate::Effect;
@@ -1213,19 +1254,19 @@ void MainComponent::comboBoxChanged(juce::ComboBox* comboBox) {
     }
 
     if (comboBox == &presetBox_) {
-        if (*nodeTypeOpt != audio::GraphNodeType::Position) {
+        if (*nodeTypeOpt != audio::GraphNodeType::Person) {
             return;
         }
         const auto selectedId = presetBox_.getSelectedId();
         if (selectedId <= 1) {
             presetBox_.setSelectedId(1, juce::dontSendNotification);
-            if (app_.clearPositionPreset(*selectedNode_)) {
+            if (app_.clearPersonPreset(*selectedNode_)) {
                 refreshSetupPanel();
             }
             return;
         }
         const auto presetName = presetBox_.getText();
-        if (presetName.isNotEmpty() && app_.applyPositionPreset(*selectedNode_, presetName.toStdString())) {
+        if (presetName.isNotEmpty() && app_.applyPersonPreset(*selectedNode_, presetName.toStdString())) {
             refreshSetupPanel();
             if (currentMicro_ && currentMicro_->id == *selectedNode_) {
                 auto descriptor = app_.microViewDescriptor(currentMicro_->id);

@@ -14,6 +14,9 @@ namespace broadcastmix::ui {
 
 namespace {
 
+constexpr float kMinNormalisedCoordinate = -0.25F;
+constexpr float kMaxNormalisedCoordinate = 2.0F;
+
 float normalisedCoordinate(std::size_t index, std::size_t count) {
     if (count <= 1) {
         return 0.5F;
@@ -63,8 +66,8 @@ const NodeGraphView::PositionOverrideMap& NodeGraphView::positionOverrides() con
 
 void NodeGraphView::setPositionOverride(const std::string& nodeId, float normX, float normY) {
     overrides_[nodeId] = PositionOverride {
-        .normX = std::clamp(normX, 0.0F, 1.0F),
-        .normY = std::clamp(normY, 0.0F, 1.0F)
+        .normX = std::clamp(normX, kMinNormalisedCoordinate, kMaxNormalisedCoordinate),
+        .normY = std::clamp(normY, kMinNormalisedCoordinate, kMaxNormalisedCoordinate)
     };
     rebuildLayout();
 }
@@ -76,8 +79,8 @@ void NodeGraphView::clearPositionOverride(const std::string& nodeId) {
 
 void NodeGraphView::setPositionOverrides(PositionOverrideMap overrides) {
     for (auto& [id, position] : overrides) {
-        position.normX = std::clamp(position.normX, 0.0F, 1.0F);
-        position.normY = std::clamp(position.normY, 0.0F, 1.0F);
+        position.normX = std::clamp(position.normX, kMinNormalisedCoordinate, kMaxNormalisedCoordinate);
+        position.normY = std::clamp(position.normY, kMinNormalisedCoordinate, kMaxNormalisedCoordinate);
     }
     overrides_ = std::move(overrides);
     rebuildLayout();
@@ -234,7 +237,7 @@ void NodeGraphView::rebuildLayout() {
             const auto source = node->source();
             const auto profileImage = node->profileImagePath();
             const auto preset = node->presetName();
-            if (node->type() == audio::GraphNodeType::Position && !person.empty()) {
+            if (node->type() == audio::GraphNodeType::Person && !person.empty()) {
                 displayLabel = person;
             }
 

@@ -189,7 +189,7 @@ std::unique_ptr<juce::AudioProcessor> JuceGraphBuilder::createProcessorForNode(c
                                                                   meterStore_ ? meterStore_->meterFor(node.id()) : nullptr,
                                                                   channelSetForNode(node));
     case GraphNodeType::GroupBus:
-    case GraphNodeType::Position:
+    case GraphNodeType::Person:
         return std::make_unique<processors::PassThroughProcessor>("Group Bus",
                                                                   meterStore_ ? meterStore_->meterFor(node.id()) : nullptr,
                                                                   channelSetForNode(node));

@@ -66,8 +66,9 @@ private:
     void applyRoleUpdate();
     void chooseProfileImage();
     void clearProfileImage();
+    void refreshActiveGraphView();
     void updateAvatarDisplay(const audio::GraphNode& node);
-    void saveCurrentPositionPreset();
+    void saveCurrentPersonPreset();
 
     class AvatarComponent : public juce::Component {
     public:
@@ -87,6 +88,7 @@ private:
 
     core::Application& app_;
     NodeGraphComponent graphComponent_;
+    juce::Viewport graphViewport_;
     NodeLibraryComponent nodeLibrary_;
     juce::Label headline_;
     juce::Label subtext_;

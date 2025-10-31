@@ -21,7 +21,7 @@ struct MicroViewState {
     std::unordered_map<std::string, LayoutPosition> layout;
 };
 
-struct PositionPresetState {
+struct PersonPresetState {
     std::string name;
     std::string person;
     std::string role;
@@ -37,7 +37,7 @@ struct Project {
     std::optional<std::string> lastAutosavePath;
     std::unordered_map<std::string, LayoutPosition> macroLayout;
     std::unordered_map<std::string, MicroViewState> microViews;
-    std::vector<PositionPresetState> positionPresets;
+    std::vector<PersonPresetState> personPresets;
 };
 
 class ProjectSerializer {

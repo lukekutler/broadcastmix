@@ -11,7 +11,7 @@ enum class GraphNodeType {
     Input,
     Channel,
     GroupBus,
-    Position,
+    Person,
     BroadcastBus,
     MixBus,
     Utility,

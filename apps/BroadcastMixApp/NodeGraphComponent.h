@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <utility>
 #include <array>
+#include <limits>
 
 namespace broadcastmix::app {
 
@@ -68,6 +69,13 @@ private:
         juce::Line<float> line;
     };
 
+    struct CachedLabelBounds {
+        juce::Rectangle<float> bounds;
+        juce::Rectangle<float> availableBounds;
+        std::string text;
+        bool isPerson { false };
+    };
+
     void timerCallback() override;
     bool isInterestedInDragSource(const SourceDetails& dragSourceDetails) override;
     void itemDragEnter(const SourceDetails& dragSourceDetails) override;
@@ -80,24 +88,46 @@ private:
     void resolveFixedEndpoints();
     [[nodiscard]] juce::Colour toColour(const ui::Color& color) const;
     [[nodiscard]] juce::Colour nodeFillColour(audio::GraphNodeType type) const;
-    void refreshCachedPositions();
+    void refreshCachedPositions(bool force = false);
     [[nodiscard]] juce::Rectangle<float> computeLayoutArea() const;
     [[nodiscard]] juce::Rectangle<float> nodeBoundsForPosition(const juce::Point<float>& position) const;
     [[nodiscard]] std::optional<std::string> hitTestNode(const juce::Point<float>& position) const;
     [[nodiscard]] std::optional<PortSelection> findPortAt(const juce::Point<float>& position) const;
     [[nodiscard]] juce::Point<float> portPosition(const PortSelection& port) const;
     [[nodiscard]] std::optional<juce::Rectangle<float>> labelBoundsForNode(const std::string& nodeId) const;
+    juce::Rectangle<float> labelBoundsForText(const std::string& nodeId,
+                                              const std::string& text,
+                                              bool isPerson,
+                                              const juce::Font& font,
+                                              const juce::Rectangle<float>& available,
+                                              juce::Justification justification);
+    juce::Image cachedAvatarForPath(const std::string& path);
     void beginInlineRename(const std::string& nodeId, const juce::Rectangle<int>& bounds);
     void commitInlineRename(bool apply);
 
+public:
+    [[nodiscard]] int contentWidth() const noexcept { return lastContentWidth_ > 0 ? lastContentWidth_ : getWidth(); }
+    [[nodiscard]] int contentHeight() const noexcept { return lastContentHeight_ > 0 ? lastContentHeight_ : getHeight(); }
+
+private:
     ui::NodeGraphView* view_ { nullptr };
     std::size_t lastLayoutVersion_ { 0 };
+    std::size_t cachedPositionsVersion_ { std::numeric_limits<std::size_t>::max() };
+    int lastWidth_ { -1 };
+    int lastHeight_ { -1 };
+    int lastContentWidth_ { -1 };
+    int lastContentHeight_ { -1 };
     std::unordered_map<std::string, juce::Point<float>> cachedPositions_;
-    std::unordered_map<std::string, juce::Rectangle<float>> labelBoundsCache_;
+    std::unordered_map<std::string, CachedLabelBounds> labelBoundsCache_;
+    std::unordered_map<std::string, juce::Image> avatarCache_;
     std::optional<std::string> draggingNodeId_;
     std::optional<std::string> selectedNodeId_;
     juce::Point<float> dragOffset_ {};
     juce::Rectangle<float> layoutArea_ {};
+    float normOriginX_ { 0.0F };
+    float normOriginY_ { 0.0F };
+    float normSpanX_ { 1.0F };
+    float normSpanY_ { 1.0F };
     std::function<void(const std::string&)> onNodeDoubleClicked_;
     std::function<void(const std::string&, float, float)> onNodeDragged_;
     std::function<std::array<float, 2>(const std::string&)> meterProvider_;

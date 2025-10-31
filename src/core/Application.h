@@ -28,7 +28,7 @@ public:
         Channel,
         Output,
         Group,
-        Position,
+        Person,
         Effect,
         SignalGenerator
     };
@@ -89,13 +89,13 @@ public:
                                std::uint32_t inputChannels,
                                std::uint32_t outputChannels);
     bool renameNode(const std::string& nodeId, const std::string& newLabel);
-    bool updatePositionPerson(const std::string& nodeId, const std::string& person);
-    bool updatePositionRole(const std::string& nodeId, const std::string& role, bool preservePreset = false);
-    bool updatePositionProfileImage(const std::string& nodeId, const std::string& imagePath, bool preservePreset = false);
-    bool savePositionPreset(const std::string& nodeId, const std::string& presetName);
-    bool applyPositionPreset(const std::string& nodeId, const std::string& presetName);
-    bool clearPositionPreset(const std::string& nodeId);
-    [[nodiscard]] std::vector<std::string> positionPresetNames() const;
+    bool updatePersonName(const std::string& nodeId, const std::string& person);
+    bool updatePersonRole(const std::string& nodeId, const std::string& role, bool preservePreset = false);
+    bool updatePersonProfileImage(const std::string& nodeId, const std::string& imagePath, bool preservePreset = false);
+    bool savePersonPreset(const std::string& nodeId, const std::string& presetName);
+    bool applyPersonPreset(const std::string& nodeId, const std::string& presetName);
+    bool clearPersonPreset(const std::string& nodeId);
+    [[nodiscard]] std::vector<std::string> personPresetNames() const;
 
 private:
     void applyMacroLayout();
@@ -115,7 +115,7 @@ private:
                                                               const std::optional<std::pair<std::string, std::string>>& insertBetween) const;
     void updateMicroTopologyForNode(const std::string& nodeId);
     [[nodiscard]] audio::GraphNodeType resolveNodeType(const std::string& nodeId) const;
-    void setPositionPresetForNode(const std::string& nodeId, const std::string& presetName);
+    void setPersonPresetForNode(const std::string& nodeId, const std::string& presetName);
     static bool rewireForInsertion(audio::GraphTopology& topology,
                                    const std::optional<std::pair<std::string, std::string>>& insertBetween,
                                    const std::string& newNodeId,

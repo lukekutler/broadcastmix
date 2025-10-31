@@ -4,7 +4,9 @@
 #include <array>
 #include <cmath>
 #include <cctype>
+#include <limits>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 #include <iostream>
 
@@ -19,6 +21,9 @@ constexpr float kVerticalPadding = 36.0F;
 constexpr float kPortRadius = 5.0F;
 constexpr float kPortHitRadius = 9.0F;
 constexpr float kConnectionDropTolerance = 12.0F;
+constexpr float kNormPadding = 0.1F;
+constexpr float kNormMin = -0.25F;
+constexpr float kNormMax = 2.0F;
 
 std::string initialsFromName(const std::string& name) {
     std::string initials;
@@ -85,10 +90,15 @@ void NodeGraphComponent::paint(juce::Graphics& g) {
     const auto area = layoutArea_;
 
     const auto& theme = view_->theme();
-    g.fillAll(toColour(theme.background));
+    const auto backgroundColour = toColour(theme.background);
+    const auto accentColour = toColour(theme.accent);
+    const auto textPrimaryColour = toColour(theme.textPrimary);
+    const auto meterPeakColour = toColour(theme.meterPeak);
+
+    g.fillAll(backgroundColour);
 
     // Draw grid backdrop.
-    g.setColour(toColour(theme.background).brighter(0.08F));
+    g.setColour(backgroundColour.brighter(0.08F));
     const auto gridSpacing = 32.0F;
     for (float x = area.getX(); x <= area.getRight(); x += gridSpacing) {
         g.drawLine(x, area.getY(), x, area.getBottom(), 0.5F);
@@ -105,13 +115,16 @@ void NodeGraphComponent::paint(juce::Graphics& g) {
     fixedOutputNormY_.reset();
 
     if (view_->nodes().empty()) {
-        g.setColour(toColour(theme.textPrimary).withAlpha(0.55F));
+        g.setColour(textPrimaryColour.withAlpha(0.55F));
         g.setFont(juce::Font(juce::FontOptions { 16.0F }));
         g.drawFittedText("Drag nodes from the library",
                          area.toNearestInt(),
                          juce::Justification::centred,
                          1);
     }
+
+    const auto clipBounds = g.getClipBounds().toFloat().expanded(24.0F);
+    juce::DropShadow nodeShadow(backgroundColour.darker(0.4F), 10, {});
 
     const auto computePortY = [](const juce::Rectangle<float>& bounds, std::uint32_t count, std::size_t index) {
         if (count == 0) {
@@ -139,12 +152,12 @@ void NodeGraphComponent::paint(juce::Graphics& g) {
             const auto anchor = juce::Point<float>(anchorX, anchorY);
             const float radius = 8.0F;
             juce::Rectangle<float> circleBounds(anchor.x - radius, anchor.y - radius, radius * 2.0F, radius * 2.0F);
-            g.setColour(toColour(theme.accent).withAlpha(0.38F));
+            g.setColour(accentColour.withAlpha(0.38F));
             g.fillEllipse(circleBounds);
-            g.setColour(toColour(theme.accent));
+            g.setColour(accentColour);
             g.drawEllipse(circleBounds, 1.6F);
 
-            g.setColour(toColour(theme.textPrimary));
+            g.setColour(textPrimaryColour);
             g.setFont(juce::Font(juce::FontOptions { 11.0F, juce::Font::bold }));
             auto labelBounds = circleBounds.withSizeKeepingCentre(30.0F, 16.0F);
             labelBounds = isFixedInput ? labelBounds.translated(20.0F, -18.0F) : labelBounds.translated(-20.0F, -18.0F);
@@ -168,84 +181,105 @@ void NodeGraphComponent::paint(juce::Graphics& g) {
         }
 
         const auto nodeBounds = nodeBoundsForPosition(position);
+        if (!clipBounds.intersects(nodeBounds.expanded(12.0F))) {
+            continue;
+        }
+
         auto fillColour = nodeFillColour(nodeVisual.type);
         if (!nodeVisual.enabled) {
             fillColour = fillColour.withAlpha(0.35F);
         }
 
-        juce::DropShadow shadow(toColour(theme.background).darker(0.4F), 10, {});
-        shadow.drawForRectangle(g, nodeBounds.toNearestInt());
+        nodeShadow.drawForRectangle(g, nodeBounds.toNearestInt());
 
         g.setColour(fillColour);
         g.fillRoundedRectangle(nodeBounds, kCornerRadius);
 
-        g.setColour(toColour(theme.textPrimary));
+        g.setColour(textPrimaryColour);
         auto labelBounds = nodeBounds.reduced(12.0F);
-        if (renameEditor_ && renamingNodeId_ == nodeVisual.id) {
-            renameEditor_->setBounds(labelBounds.toNearestInt());
-        }
         const bool isRenamingNode = renameEditor_ && renamingNodeId_ == nodeVisual.id;
-        const bool isPositionNode = nodeVisual.type == audio::GraphNodeType::Position;
-        if (!isRenamingNode) {
-            if (isPositionNode) {
-                const juce::String personText(nodeVisual.person.empty() ? nodeVisual.label : nodeVisual.person);
-                const juce::String roleText(nodeVisual.role);
-                auto textBounds = labelBounds.toNearestInt();
+        const bool isPersonNode = nodeVisual.type == audio::GraphNodeType::Person;
+        juce::Rectangle<float> renameBounds = labelBounds;
+        if (isPersonNode) {
+            const juce::String personText(nodeVisual.person.empty() ? nodeVisual.label : nodeVisual.person);
+            const juce::String roleText(nodeVisual.role);
+            auto textBounds = labelBounds.toNearestInt();
 
-                const float avatarDiameter = 28.0F;
-                juce::Rectangle<float> avatarBounds(labelBounds.getX(), labelBounds.getY(), avatarDiameter, avatarDiameter);
-                const auto accentColour = toColour(theme.accent);
+            const float avatarDiameter = 28.0F;
+            juce::Rectangle<float> avatarBounds(labelBounds.getX(), labelBounds.getY(), avatarDiameter, avatarDiameter);
+
+            juce::Image avatarImage;
+            if (!nodeVisual.profileImagePath.empty()) {
+                avatarImage = cachedAvatarForPath(nodeVisual.profileImagePath);
+            }
+
+            if (!avatarImage.isValid()) {
                 g.setColour(accentColour.withAlpha(0.25F));
                 g.fillEllipse(avatarBounds);
-
-                if (!nodeVisual.profileImagePath.empty()) {
-                    const auto avatarImage = loadAvatarImage(nodeVisual.profileImagePath);
-                    if (avatarImage.isValid()) {
-                        juce::Graphics::ScopedSaveState stateAvatar(g);
-                        juce::Path clip;
-                        clip.addEllipse(avatarBounds);
-                        g.reduceClipRegion(clip);
-                        g.drawImageWithin(avatarImage,
-                                          static_cast<int>(std::floor(avatarBounds.getX())),
-                                          static_cast<int>(std::floor(avatarBounds.getY())),
-                                          static_cast<int>(std::round(avatarBounds.getWidth())),
-                                          static_cast<int>(std::round(avatarBounds.getHeight())),
-                                          juce::RectanglePlacement::fillDestination);
-                    }
-                } else {
-                    const auto initials = initialsFromName(nodeVisual.person.empty() ? nodeVisual.label : nodeVisual.person);
-                    if (!initials.empty()) {
-                        g.setColour(toColour(theme.textPrimary));
-                        g.setFont(juce::Font(juce::FontOptions { avatarDiameter * 0.45F, juce::Font::bold }));
-                        g.drawFittedText(juce::String(initials),
-                                         avatarBounds.toNearestInt(),
-                                         juce::Justification::centred,
-                                         1);
-                    }
+                const auto initials = initialsFromName(nodeVisual.person.empty() ? nodeVisual.label : nodeVisual.person);
+                if (!initials.empty()) {
+                    g.setColour(textPrimaryColour);
+                    g.setFont(juce::Font(juce::FontOptions { avatarDiameter * 0.45F, juce::Font::bold }));
+                    g.drawFittedText(juce::String(initials),
+                                     avatarBounds.toNearestInt(),
+                                     juce::Justification::centred,
+                                     1);
                 }
-                g.setColour(accentColour);
-                g.drawEllipse(avatarBounds, 1.4F);
+            } else {
+                juce::Graphics::ScopedSaveState stateAvatar(g);
+                juce::Path clip;
+                clip.addEllipse(avatarBounds);
+                g.reduceClipRegion(clip);
+                g.drawImageWithin(avatarImage,
+                                  static_cast<int>(std::floor(avatarBounds.getX())),
+                                  static_cast<int>(std::floor(avatarBounds.getY())),
+                                  static_cast<int>(std::round(avatarBounds.getWidth())),
+                                  static_cast<int>(std::round(avatarBounds.getHeight())),
+                                  juce::RectanglePlacement::fillDestination);
+            }
+            g.setColour(accentColour);
+            g.drawEllipse(avatarBounds, 1.4F);
 
-                textBounds.removeFromLeft(static_cast<int>(avatarDiameter) + 12);
-                auto nameBounds = textBounds.removeFromTop(28);
-                g.setColour(toColour(theme.textPrimary));
-                g.setFont(juce::Font(juce::FontOptions { 18.0F, juce::Font::bold }));
-                g.drawFittedText(personText.isNotEmpty() ? personText : juce::String(nodeVisual.label),
-                                 nameBounds,
+            textBounds.removeFromLeft(static_cast<int>(avatarDiameter) + 12);
+            auto nameBoundsInt = textBounds.removeFromTop(28);
+            const auto nameText = personText.isNotEmpty() ? personText : juce::String(nodeVisual.label);
+            juce::Font nameFont(juce::FontOptions { 18.0F, juce::Font::bold });
+            renameBounds = labelBoundsForText(nodeVisual.id,
+                                              nameText.toStdString(),
+                                              true,
+                                              nameFont,
+                                              nameBoundsInt.toFloat(),
+                                              juce::Justification::centredLeft);
+
+            if (!isRenamingNode) {
+                g.setColour(textPrimaryColour);
+                g.setFont(nameFont);
+                g.drawFittedText(nameText,
+                                 nameBoundsInt,
                                  juce::Justification::centredLeft,
                                  1);
                 if (roleText.isNotEmpty()) {
                     textBounds.removeFromTop(4);
-                    g.setColour(toColour(theme.textPrimary).withAlpha(0.75F));
+                    g.setColour(textPrimaryColour.withAlpha(0.75F));
                     g.setFont(juce::Font(juce::FontOptions { 13.0F, juce::Font::plain }));
                     g.drawFittedText(roleText,
                                      textBounds.removeFromTop(20),
                                      juce::Justification::centredLeft,
                                      1);
-                    g.setColour(toColour(theme.textPrimary));
+                    g.setColour(textPrimaryColour);
                 }
-            } else {
-                g.setFont(juce::Font(juce::FontOptions { 15.0F, juce::Font::bold }));
+            }
+        } else {
+            juce::Font labelFont(juce::FontOptions { 15.0F, juce::Font::bold });
+            renameBounds = labelBoundsForText(nodeVisual.id,
+                                              nodeVisual.label,
+                                              false,
+                                              labelFont,
+                                              labelBounds,
+                                              juce::Justification::centred);
+
+            if (!isRenamingNode) {
+                g.setFont(labelFont);
                 g.drawFittedText(nodeVisual.label,
                                  labelBounds.toNearestInt(),
                                  juce::Justification::centred,
@@ -253,13 +287,17 @@ void NodeGraphComponent::paint(juce::Graphics& g) {
             }
         }
 
+        if (isRenamingNode && renameEditor_) {
+            renameEditor_->setBounds(renameBounds.toNearestInt());
+        }
+
         if (selectedNodeId_ && *selectedNodeId_ == nodeVisual.id) {
-            g.setColour(toColour(theme.accent));
+            g.setColour(accentColour);
             g.drawRoundedRectangle(nodeBounds.expanded(4.0F), kCornerRadius + 4.0F, 2.0F);
         }
 
         if (swapTargetId_ && *swapTargetId_ == nodeVisual.id) {
-            g.setColour(toColour(theme.accent).withAlpha(0.45F));
+            g.setColour(accentColour.withAlpha(0.45F));
             g.drawRoundedRectangle(nodeBounds.expanded(6.0F), kCornerRadius + 6.0F, 2.5F);
         }
 
@@ -275,9 +313,9 @@ void NodeGraphComponent::paint(juce::Graphics& g) {
                 nodeBounds.getHeight() - (meterMargin * 2.0F)
             };
             auto filledBounds = meterBounds.withTrimmedTop(meterBounds.getHeight() * (1.0F - level));
-            g.setColour(toColour(theme.meterPeak));
+            g.setColour(meterPeakColour);
             g.fillRect(filledBounds);
-            g.setColour(toColour(theme.textPrimary).withAlpha(0.3F));
+            g.setColour(textPrimaryColour.withAlpha(0.3F));
             g.drawRect(meterBounds, 1.0F);
         }
 
@@ -326,7 +364,7 @@ void NodeGraphComponent::paint(juce::Graphics& g) {
     }
 
     connectionSegments_.clear();
-    const auto accentColour = toColour(theme.accent).withAlpha(0.7F);
+    const auto connectionColour = toColour(theme.accent).withAlpha(0.7F);
 
     std::unordered_set<std::string> drawnConnections;
     drawnConnections.reserve(view_->connections().size());
@@ -351,7 +389,7 @@ void NodeGraphComponent::paint(juce::Graphics& g) {
             pendingDropConnection_->first == connection.fromId &&
             pendingDropConnection_->second == connection.toId;
 
-        auto colour = accentColour.withAlpha(0.5F);
+        auto colour = connectionColour.withAlpha(0.5F);
         auto thickness = 2.0F;
         if (isSelected) {
             colour = toColour(theme.accent).brighter(0.4F);
@@ -579,8 +617,13 @@ void NodeGraphComponent::mouseDrag(const juce::MouseEvent& event) {
         return;
     }
 
-    const auto normX = juce::jlimit(0.0F, 1.0F, (center.x - layoutArea_.getX()) / width);
-    const auto normY = juce::jlimit(0.0F, 1.0F, (center.y - layoutArea_.getY()) / height);
+    const auto normalizedX = juce::jlimit(0.0F, 1.0F, (center.x - layoutArea_.getX()) / width);
+    const auto normalizedY = juce::jlimit(0.0F, 1.0F, (center.y - layoutArea_.getY()) / height);
+
+    auto normX = normOriginX_ + normalizedX * normSpanX_;
+    auto normY = normOriginY_ + normalizedY * normSpanY_;
+    normX = juce::jlimit(kNormMin, kNormMax, normX);
+    normY = juce::jlimit(kNormMin, kNormMax, normY);
 
     view_->setPositionOverride(*draggingNodeId_, normX, normY);
     cachedPositions_[*draggingNodeId_] = center;
@@ -877,10 +920,10 @@ void NodeGraphComponent::itemDropped(const SourceDetails& dragSourceDetails) {
     position.x = juce::jlimit(layoutArea_.getX(), layoutArea_.getRight(), position.x);
     position.y = juce::jlimit(layoutArea_.getY(), layoutArea_.getBottom(), position.y);
 
-    auto normX = (position.x - layoutArea_.getX()) / width;
-    auto normY = (position.y - layoutArea_.getY()) / height;
-    normX = juce::jlimit(0.0F, 1.0F, normX);
-    normY = juce::jlimit(0.0F, 1.0F, normY);
+    auto normalizedX = juce::jlimit(0.0F, 1.0F, (position.x - layoutArea_.getX()) / width);
+    auto normalizedY = juce::jlimit(0.0F, 1.0F, (position.y - layoutArea_.getY()) / height);
+    auto normX = juce::jlimit(kNormMin, kNormMax, normOriginX_ + normalizedX * normSpanX_);
+    auto normY = juce::jlimit(kNormMin, kNormMax, normOriginY_ + normalizedY * normSpanY_);
 
     NodeCreateRequest request;
     request.templateId = *dropType;
@@ -916,6 +959,17 @@ void NodeGraphComponent::setGraphView(ui::NodeGraphView* view) {
     draggingPort_.reset();
     hoverPort_.reset();
     cachedPositions_.clear();
+    cachedPositionsVersion_ = std::numeric_limits<std::size_t>::max();
+    lastWidth_ = -1;
+    lastHeight_ = -1;
+    lastContentWidth_ = -1;
+    lastContentHeight_ = -1;
+    normOriginX_ = 0.0F;
+    normOriginY_ = 0.0F;
+    normSpanX_ = 1.0F;
+    normSpanY_ = 1.0F;
+    labelBoundsCache_.clear();
+    avatarCache_.clear();
     inputPortPositions_.clear();
     outputPortPositions_.clear();
     connectionSegments_.clear();
@@ -929,7 +983,7 @@ void NodeGraphComponent::setGraphView(ui::NodeGraphView* view) {
     fixedInputNormY_.reset();
     fixedOutputNormY_.reset();
     resolveFixedEndpoints();
-    refreshCachedPositions();
+    refreshCachedPositions(true);
     if (onSelectionChanged_) {
         onSelectionChanged_(selectedNodeId_);
     }
@@ -1046,7 +1100,7 @@ juce::Colour NodeGraphComponent::nodeFillColour(audio::GraphNodeType type) const
         return base;
     case audio::GraphNodeType::GroupBus:
         return base.darker(0.1F);
-    case audio::GraphNodeType::Position:
+    case audio::GraphNodeType::Person:
         return base.darker(0.05F);
     case audio::GraphNodeType::BroadcastBus:
         return base.darker(0.25F);
@@ -1065,22 +1119,94 @@ juce::Colour NodeGraphComponent::nodeFillColour(audio::GraphNodeType type) const
     }
 }
 
-void NodeGraphComponent::refreshCachedPositions() {
-    layoutArea_ = computeLayoutArea();
-    cachedPositions_.clear();
+void NodeGraphComponent::refreshCachedPositions(bool force) {
+    auto bounds = getLocalBounds();
+
     if (view_ == nullptr) {
+        layoutArea_ = computeLayoutArea();
+        cachedPositions_.clear();
+        cachedPositionsVersion_ = std::numeric_limits<std::size_t>::max();
+        lastWidth_ = bounds.getWidth();
+        lastHeight_ = bounds.getHeight();
+        lastContentWidth_ = bounds.getWidth();
+        lastContentHeight_ = bounds.getHeight();
+        normOriginX_ = 0.0F;
+        normOriginY_ = 0.0F;
+        normSpanX_ = 1.0F;
+        normSpanY_ = 1.0F;
         return;
     }
 
+    float minNormX = std::numeric_limits<float>::max();
+    float maxNormX = std::numeric_limits<float>::lowest();
+    float minNormY = std::numeric_limits<float>::max();
+    float maxNormY = std::numeric_limits<float>::lowest();
+
+    for (const auto& node : view_->nodes()) {
+        minNormX = std::min(minNormX, node.normX);
+        maxNormX = std::max(maxNormX, node.normX);
+        minNormY = std::min(minNormY, node.normY);
+        maxNormY = std::max(maxNormY, node.normY);
+    }
+
+    if (!view_->nodes().empty()) {
+        minNormX = std::min(minNormX, kNormMin);
+        maxNormX = std::max(maxNormX, kNormMax - 0.25F);
+        minNormY = std::min(minNormY, kNormMin);
+        maxNormY = std::max(maxNormY, kNormMax - 0.25F);
+    } else {
+        minNormX = 0.0F;
+        maxNormX = 1.0F;
+        minNormY = 0.0F;
+        maxNormY = 1.0F;
+    }
+
+    const float paddedMinX = minNormX - kNormPadding;
+    const float paddedMaxX = maxNormX + kNormPadding;
+    const float paddedMinY = minNormY - kNormPadding;
+    const float paddedMaxY = maxNormY + kNormPadding;
+
+    normOriginX_ = paddedMinX;
+    normOriginY_ = paddedMinY;
+    normSpanX_ = std::max(0.001F, paddedMaxX - paddedMinX);
+    normSpanY_ = std::max(0.001F, paddedMaxY - paddedMinY);
+
+    const int derivedWidth = static_cast<int>(std::ceil(normSpanX_ * kNodeWidth + (normSpanX_ + 1.0F) * kHorizontalPadding));
+    const int derivedHeight = static_cast<int>(std::ceil(normSpanY_ * kNodeHeight + (normSpanY_ + 1.0F) * kVerticalPadding));
+
+    const int contentWidth = std::max(bounds.getWidth(), derivedWidth);
+    const int contentHeight = std::max(bounds.getHeight(), derivedHeight);
+
+    if (contentWidth != getWidth() || contentHeight != getHeight()) {
+        lastContentWidth_ = contentWidth;
+        lastContentHeight_ = contentHeight;
+        setSize(contentWidth, contentHeight);
+        bounds = getLocalBounds();
+    } else {
+        lastContentWidth_ = contentWidth;
+        lastContentHeight_ = contentHeight;
+    }
+
+    const auto layoutVersion = view_->layoutVersion();
+    const bool sizeChanged = bounds.getWidth() != lastWidth_ || bounds.getHeight() != lastHeight_;
+    if (!force && !sizeChanged && layoutVersion == cachedPositionsVersion_) {
+        return;
+    }
+
+    lastWidth_ = bounds.getWidth();
+    lastHeight_ = bounds.getHeight();
+    cachedPositionsVersion_ = layoutVersion;
+
+    layoutArea_ = computeLayoutArea();
+    cachedPositions_.clear();
     cachedPositions_.reserve(view_->nodes().size());
 
     for (const auto& node : view_->nodes()) {
-        auto normPos = juce::Point<float>(node.normX, node.normY);
-        const auto clampedNorm = juce::Point<float>(
-            juce::jlimit(0.0F, 1.0F, normPos.x),
-            juce::jlimit(0.0F, 1.0F, normPos.y));
-        const auto centerX = layoutArea_.getX() + clampedNorm.x * layoutArea_.getWidth();
-        const auto centerY = layoutArea_.getY() + clampedNorm.y * layoutArea_.getHeight();
+        const auto normPos = juce::Point<float>(node.normX, node.normY);
+        const float normalizedX = (normPos.x - normOriginX_) / normSpanX_;
+        const float normalizedY = (normPos.y - normOriginY_) / normSpanY_;
+        const auto centerX = layoutArea_.getX() + juce::jlimit(0.0F, 1.0F, normalizedX) * layoutArea_.getWidth();
+        const auto centerY = layoutArea_.getY() + juce::jlimit(0.0F, 1.0F, normalizedY) * layoutArea_.getHeight();
         cachedPositions_.emplace(node.id, juce::Point<float>(centerX, centerY));
     }
 }
@@ -1162,6 +1288,9 @@ juce::Point<float> NodeGraphComponent::portPosition(const PortSelection& port) c
 }
 
 std::optional<juce::Rectangle<float>> NodeGraphComponent::labelBoundsForNode(const std::string& nodeId) const {
+    if (const auto it = labelBoundsCache_.find(nodeId); it != labelBoundsCache_.end()) {
+        return it->second.bounds;
+    }
     if (view_ == nullptr) {
         return std::nullopt;
     }
@@ -1171,6 +1300,54 @@ std::optional<juce::Rectangle<float>> NodeGraphComponent::labelBoundsForNode(con
     }
     const auto nodeBounds = nodeBoundsForPosition(posIt->second);
     return nodeBounds.reduced(12.0F);
+}
+
+juce::Rectangle<float> NodeGraphComponent::labelBoundsForText(const std::string& nodeId,
+                                                              const std::string& text,
+                                                              bool isPerson,
+                                                              const juce::Font& font,
+                                                              const juce::Rectangle<float>& available,
+                                                              juce::Justification justification) {
+    auto& entry = labelBoundsCache_[nodeId];
+    if (entry.text == text && entry.isPerson == isPerson && entry.availableBounds == available && !entry.bounds.isEmpty()) {
+        return entry.bounds;
+    }
+
+    juce::GlyphArrangement arrangement;
+    arrangement.addFittedText(font,
+                              juce::String(text),
+                              available.getX(),
+                              available.getY(),
+                              available.getWidth(),
+                              available.getHeight(),
+                              justification,
+                              1);
+    auto bounds = arrangement.getBoundingBox(0, arrangement.getNumGlyphs(), true);
+    if (bounds.isEmpty()) {
+        bounds = available;
+    }
+
+    entry.bounds = bounds;
+    entry.availableBounds = available;
+    entry.text = text;
+    entry.isPerson = isPerson;
+    return entry.bounds;
+}
+
+juce::Image NodeGraphComponent::cachedAvatarForPath(const std::string& path) {
+    if (path.empty()) {
+        return {};
+    }
+
+    if (const auto it = avatarCache_.find(path); it != avatarCache_.end()) {
+        return it->second;
+    }
+
+    auto image = loadAvatarImage(path);
+    if (image.isValid()) {
+        avatarCache_.emplace(path, image);
+    }
+    return image;
 }
 
 void NodeGraphComponent::beginInlineRename(const std::string& nodeId, const juce::Rectangle<int>& bounds) {
@@ -1192,13 +1369,19 @@ void NodeGraphComponent::beginInlineRename(const std::string& nodeId, const juce
 
     auto editor = std::make_unique<juce::TextEditor>();
     editor->setBounds(bounds);
-    editor->setIndents(2, 2);
+    editor->setIndents(0, 0);
+    editor->setBorder(juce::BorderSize<int>());
     editor->setReturnKeyStartsNewLine(false);
     editor->setJustification(juce::Justification::centred);
+    editor->setOpaque(false);
     editor->setColour(juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
     editor->setColour(juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
-    editor->setColour(juce::TextEditor::focusedOutlineColourId, toColour(view_->theme().accent));
+    editor->setColour(juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
     editor->setColour(juce::TextEditor::textColourId, toColour(view_->theme().textPrimary));
+    editor->setColour(juce::TextEditor::highlightColourId, toColour(view_->theme().accent).withAlpha(0.2F));
+    editor->setColour(juce::TextEditor::highlightedTextColourId, toColour(view_->theme().textPrimary));
+    editor->setPopupMenuEnabled(false);
+    editor->setScrollbarsShown(false);
     editor->setFont(juce::Font(juce::FontOptions { 15.0F, juce::Font::bold }));
     editor->setSelectAllWhenFocused(true);
     editor->setText(currentLabel, juce::dontSendNotification);
