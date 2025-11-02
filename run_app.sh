@@ -10,7 +10,9 @@ cmake --build "${build_dir}" --target BroadcastMixApp
 app_path="${build_dir}/apps/BroadcastMixApp_artefacts/BroadcastMix.app"
 
 if [[ "${OSTYPE:-}" == darwin* ]]; then
-    open "${app_path}"
+    # Run the executable directly to see console output
+    # Use 'open' instead if you don't need to see debug logs
+    "${app_path}/Contents/MacOS/BroadcastMix"
 else
     echo "BroadcastMixApp built at: ${app_path}"
 fi

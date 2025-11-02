@@ -44,9 +44,15 @@ private:
         std::unique_ptr<ui::NodeGraphView> view;
     };
 
+    struct ViewportState {
+        juce::Point<int> position;
+        float zoom { 1.0F };
+    };
+
     juce::Colour toColour(const ui::Color& color) const;
     void handleNodeDoubleClick(const std::string& nodeId);
     void switchToMacroView();
+    void refreshCurrentView();
     void switchToMicroView(const std::string& nodeId, const std::string& label, const core::Application::MicroViewDescriptor& descriptor);
     void updateBreadcrumbs();
     void navigateBack();
@@ -118,6 +124,7 @@ private:
     std::string currentProfileImagePath_;
     std::unique_ptr<juce::FileChooser> activeFileChooser_;
     std::vector<std::pair<std::string, std::string>> breadcrumbStack_;
+    std::unordered_map<std::string, ViewportState> savedViewportStates_;
 };
 
 } // namespace broadcastmix::app

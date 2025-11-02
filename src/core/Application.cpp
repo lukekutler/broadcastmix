@@ -361,6 +361,7 @@ bool Application::toggleNodeEnabled(const std::string& nodeId) {
     currentProject_.graphTopology->setNodeEnabled(nodeId, !currentlyEnabled);
     core::log(LogCategory::Ui, "toggleNode completed for {} -> {}", nodeId, (!currentlyEnabled ? "enabled" : "disabled"));
     applyAudioTopology();
+    applyMacroLayout();
     nodeGraphView_.setTopology(currentProject_.graphTopology);
     saveProject();
     return true;
@@ -390,6 +391,7 @@ bool Application::connectNodes(const std::string& fromId, const std::string& toI
 
     if (updated) {
         applyAudioTopology();
+        applyMacroLayout();
         nodeGraphView_.setTopology(currentProject_.graphTopology);
         saveProject();
     }
@@ -417,6 +419,7 @@ bool Application::disconnectNodes(const std::string& fromId, const std::string& 
 
     if (updated) {
         applyAudioTopology();
+        applyMacroLayout();
         nodeGraphView_.setTopology(currentProject_.graphTopology);
         saveProject();
     }
@@ -457,6 +460,7 @@ bool Application::connectNodePorts(const std::string& fromId, std::size_t fromCh
     });
 
     applyAudioTopology();
+    applyMacroLayout();
     nodeGraphView_.setTopology(currentProject_.graphTopology);
     saveProject();
     return true;
@@ -1404,8 +1408,8 @@ bool Application::createNode(NodeTemplate type,
 
     currentProject_.graphTopology->addNode(std::move(node));
     currentProject_.macroLayout[id] = persistence::LayoutPosition {
-        .normX = std::clamp(normX, 0.0F, 1.0F),
-        .normY = std::clamp(normY, 0.0F, 1.0F)
+        .normX = normX,  // Don't clamp - allow full range for positioning
+        .normY = normY
     };
 
     log(LogCategory::Ui, "createNode {} id={} @({}, {})", prefix, id, normX, normY);
@@ -1416,7 +1420,8 @@ bool Application::createNode(NodeTemplate type,
         }
     }
 
-    renumberMacroNodes(type);
+    // Don't renumber on creation - let nodes keep their assigned numbers
+    // renumberMacroNodes(type);
     applyMacroLayout();
     applyAudioTopology();
     nodeGraphView_.setTopology(currentProject_.graphTopology);
@@ -1464,8 +1469,8 @@ bool Application::createMicroNode(const std::string& viewId,
 
     state.topology->addNode(std::move(node));
     state.layout[id] = persistence::LayoutPosition {
-        .normX = std::clamp(normX, 0.0F, 1.0F),
-        .normY = std::clamp(normY, 0.0F, 1.0F)
+        .normX = normX,  // Don't clamp - allow full range for positioning
+        .normY = normY
     };
 
     std::cout << "[Application] createMicroNode type=" << static_cast<int>(type)
@@ -1597,6 +1602,7 @@ bool Application::insertNodeIntoConnection(const std::string& nodeId, const std:
     }
 
     applyAudioTopology();
+    applyMacroLayout();
     nodeGraphView_.setTopology(currentProject_.graphTopology);
     saveProject();
     log(LogCategory::Ui, "insertNodeIntoConnection {} between {} -> {}", nodeId, connection.first, connection.second);
@@ -1670,6 +1676,7 @@ bool Application::configureNodeChannels(const std::string& nodeId,
     updateMicroTopologyForNode(nodeId);
 
     applyAudioTopology();
+    applyMacroLayout();
     nodeGraphView_.setTopology(currentProject_.graphTopology);
     saveProject();
     return true;
@@ -1917,6 +1924,7 @@ bool Application::applyPersonPreset(const std::string& nodeId, const std::string
 
     updateMicroTopologyForNode(nodeId);
     applyAudioTopology();
+    applyMacroLayout();
     nodeGraphView_.setTopology(currentProject_.graphTopology);
     saveProject();
     return true;
@@ -1934,6 +1942,7 @@ bool Application::clearPersonPreset(const std::string& nodeId) {
         return false;
     }
     setPersonPresetForNode(nodeId, {});
+    applyMacroLayout();
     nodeGraphView_.setTopology(currentProject_.graphTopology);
     saveProject();
     return true;

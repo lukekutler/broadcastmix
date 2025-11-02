@@ -37,6 +37,8 @@ public:
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
     void mouseDoubleClick(const juce::MouseEvent& event) override;
+    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
+    void mouseMagnify(const juce::MouseEvent& event, float scaleFactor) override;
     bool keyPressed(const juce::KeyPress& key) override;
 
     void setNodeDoubleClickHandler(std::function<void(const std::string&)> handler);
@@ -54,6 +56,10 @@ public:
     void setNodeRenameHandler(std::function<void(const std::string&, const std::string&)> handler);
     void beginNodeRename(const std::string& nodeId);
     [[nodiscard]] std::optional<std::string> selectedNode() const noexcept;
+    void setViewport(juce::Viewport* viewport);
+    void resetZoom();
+    void setZoom(float zoom);
+    [[nodiscard]] float getZoom() const noexcept { return zoomLevel_; }
 
 private:
     struct PortSelection {
@@ -86,6 +92,7 @@ private:
     void refreshDropTargets();
     [[nodiscard]] std::optional<std::pair<std::string, std::string>> connectionNear(const juce::Point<float>& position) const;
     void resolveFixedEndpoints();
+    void performAutoScroll(const juce::Point<float>& mousePosition);
     [[nodiscard]] juce::Colour toColour(const ui::Color& color) const;
     [[nodiscard]] juce::Colour nodeFillColour(audio::GraphNodeType type) const;
     void refreshCachedPositions(bool force = false);
@@ -111,12 +118,14 @@ public:
 
 private:
     ui::NodeGraphView* view_ { nullptr };
+    juce::Viewport* viewport_ { nullptr };
     std::size_t lastLayoutVersion_ { 0 };
     std::size_t cachedPositionsVersion_ { std::numeric_limits<std::size_t>::max() };
     int lastWidth_ { -1 };
     int lastHeight_ { -1 };
     int lastContentWidth_ { -1 };
     int lastContentHeight_ { -1 };
+    bool isRefreshingPositions_ { false };
     std::unordered_map<std::string, juce::Point<float>> cachedPositions_;
     std::unordered_map<std::string, CachedLabelBounds> labelBoundsCache_;
     std::unordered_map<std::string, juce::Image> avatarCache_;
@@ -124,10 +133,14 @@ private:
     std::optional<std::string> selectedNodeId_;
     juce::Point<float> dragOffset_ {};
     juce::Rectangle<float> layoutArea_ {};
+    bool isPanning_ { false };
+    juce::Point<int> panStartViewportPos_ {};
+    juce::Point<int> panStartMousePos_ {};
     float normOriginX_ { 0.0F };
     float normOriginY_ { 0.0F };
     float normSpanX_ { 1.0F };
     float normSpanY_ { 1.0F };
+    float zoomLevel_ { 1.0F };
     std::function<void(const std::string&)> onNodeDoubleClicked_;
     std::function<void(const std::string&, float, float)> onNodeDragged_;
     std::function<std::array<float, 2>(const std::string&)> meterProvider_;

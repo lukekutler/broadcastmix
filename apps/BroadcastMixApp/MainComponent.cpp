@@ -171,9 +171,12 @@ MainComponent::MainComponent(core::Application& app)
     addAndMakeVisible(backButton_);
     addAndMakeVisible(nodeLibrary_);
     graphViewport_.setViewedComponent(&graphComponent_, false);
-    graphViewport_.setScrollBarsShown(true, true, true, true);
+    // Enable scrolling but hide scrollbars - we use mouse wheel and panning
+    // JUCE doesn't support auto-hiding scrollbars natively
+    graphViewport_.setScrollBarsShown(false, false, true, true);
     graphViewport_.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::nonHover);
     graphComponent_.setViewportIgnoreDragFlag(true);
+    graphComponent_.setViewport(&graphViewport_);
     addAndMakeVisible(graphViewport_);
     addAndMakeVisible(setupGroup_);
     addAndMakeVisible(inputLabel_);
@@ -429,13 +432,12 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
         if (isMacroView) {
             changed = app_.deleteNode(*selectedNode_);
             if (changed) {
-                switchToMacroView();
+                refreshCurrentView();
             }
         } else {
             changed = app_.deleteMicroNode(currentMicro_->id, *selectedNode_);
             if (changed) {
-                auto descriptor = app_.microViewDescriptor(currentMicro_->id);
-                switchToMicroView(currentMicro_->id, labelForNode(currentMicro_->id), descriptor);
+                refreshCurrentView();
             }
         }
         if (changed) {
@@ -449,13 +451,12 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
         if (isMacroView) {
             changed = app_.toggleNodeEnabled(*selectedNode_);
             if (changed) {
-                switchToMacroView();
+                refreshCurrentView();
             }
         } else {
             changed = app_.toggleMicroNodeEnabled(currentMicro_->id, *selectedNode_);
             if (changed) {
-                auto descriptor = app_.microViewDescriptor(currentMicro_->id);
-                switchToMicroView(currentMicro_->id, labelForNode(currentMicro_->id), descriptor);
+                refreshCurrentView();
             }
         }
         return changed;
@@ -514,6 +515,24 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
 
     std::string effectiveLabel = label;
     const std::string parentId = currentMicro_ ? currentMicro_->id : std::string{};
+
+    // Save current viewport state BEFORE switching views
+    const auto currentZoom = graphComponent_.getZoom();
+    const auto currentPos = graphViewport_.getViewPosition();
+    if (currentMicro_) {
+        std::cout << "[MainComponent] Saving micro view '" << currentMicro_->id
+                  << "' state: pos=(" << currentPos.x << "," << currentPos.y
+                  << ") zoom=" << currentZoom
+                  << " contentSize=(" << graphComponent_.contentWidth() << "," << graphComponent_.contentHeight() << ")"
+                  << std::endl;
+        savedViewportStates_[currentMicro_->id] = ViewportState{currentPos, currentZoom};
+    } else {
+        std::cout << "[MainComponent] Saving macro view state: pos=(" << currentPos.x << "," << currentPos.y
+                  << ") zoom=" << currentZoom
+                  << " contentSize=(" << graphComponent_.contentWidth() << "," << graphComponent_.contentHeight() << ")"
+                  << std::endl;
+        savedViewportStates_["__macro__"] = ViewportState{currentPos, currentZoom};
+    }
 
     if (currentMicro_ && currentMicro_->id == effectiveNodeId) {
         currentMicro_->label = effectiveLabel;
@@ -649,15 +668,14 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
 
     effectiveLabel = resolvedLabel;
 
-    std::cout << "[MainComponent] switchToMicroView node='";
-    for (char c : effectiveNodeId) {
-        std::cout << c;
-    }
-    std::cout << "' len=" << effectiveNodeId.size()
+    std::cout << "[MainComponent] switchToMicroView node='" << effectiveNodeId
+              << "' macroType=" << static_cast<int>(macroType)
               << " inputExists=" << (inputExists ? "true" : "false")
               << " outputExists=" << (outputExists ? "true" : "false")
               << " fixedInput=" << (fixedInput ? fixedInput->c_str() : "<none>")
-              << " fixedOutput=" << (fixedOutput ? fixedOutput->c_str() : "<none>") << std::endl;
+              << " fixedOutput=" << (fixedOutput ? fixedOutput->c_str() : "<none>")
+              << " hasSavedState=" << (savedViewportStates_.find(effectiveNodeId) != savedViewportStates_.end() ? "true" : "false")
+              << std::endl;
     if (!effectiveNodeId.empty()) {
         std::cout << "    nodeId ASCII:";
         for (unsigned char c : effectiveNodeId) {
@@ -671,15 +689,61 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
     }
     graphComponent_.setFixedEndpoints(fixedInput, fixedOutput);
 
-    if (macroType == audio::GraphNodeType::Person) {
+    // Restore saved viewport position and zoom for this micro view, or use default
+    const auto savedStateIt = savedViewportStates_.find(effectiveNodeId);
+    const bool hasSavedState = (savedStateIt != savedViewportStates_.end());
+
+    std::cout << "[MainComponent] Viewport restore: hasSavedState=" << hasSavedState
+              << " fixedOutput=" << (fixedOutput.has_value() ? "YES" : "NO") << std::endl;
+
+    if (hasSavedState) {
+        // Restore viewport state asynchronously after layout is complete
+        const auto savedPos = savedStateIt->second.position;
+        const auto savedZoom = savedStateIt->second.zoom;
+        std::cout << "[MainComponent] Restoring saved state: pos=("
+                  << savedPos.x << "," << savedPos.y
+                  << ") zoom=" << savedZoom << std::endl;
+
+        juce::Component::SafePointer<juce::Viewport> safeViewport(&graphViewport_);
+        juce::Component::SafePointer<NodeGraphComponent> safeGraph(&graphComponent_);
+        juce::MessageManager::callAsync([safeViewport, safeGraph, savedPos, savedZoom]() mutable {
+            if (safeViewport == nullptr || safeGraph == nullptr) {
+                return;
+            }
+            safeGraph->setZoom(savedZoom);
+            safeViewport->setViewPosition(savedPos);
+
+            // Log what actually happened after setting
+            const auto actualPos = safeViewport->getViewPosition();
+            const auto actualZoom = safeGraph->getZoom();
+            std::cout << "[MainComponent] Applied saved state: requested pos=("
+                      << savedPos.x << "," << savedPos.y
+                      << ") zoom=" << savedZoom
+                      << " | actual pos=(" << actualPos.x << "," << actualPos.y
+                      << ") zoom=" << actualZoom
+                      << " contentSize=(" << safeGraph->contentWidth() << "," << safeGraph->contentHeight() << ")"
+                      << std::endl;
+        });
+    } else if (fixedOutput) {
+        std::cout << "[MainComponent] No saved state, positioning for fixed output" << std::endl;
+        // For views with fixed output, scroll to show the right side (where output is)
+        // Position the output comfortably visible from the right edge of viewport
         juce::Component::SafePointer<juce::Viewport> safeViewport(&graphViewport_);
         juce::Component::SafePointer<NodeGraphComponent> safeGraph(&graphComponent_);
         juce::MessageManager::callAsync([safeViewport, safeGraph]() mutable {
             if (safeViewport == nullptr || safeGraph == nullptr) {
                 return;
             }
-            const int desiredX = std::max(0, safeGraph->contentWidth() - safeViewport->getViewWidth());
+            // Scroll so output is visible with padding from right edge
+            // We want to show everything from some point to the right edge
+            const int maxScroll = std::max(0, safeGraph->contentWidth() - safeViewport->getViewWidth());
+            // Scroll almost all the way right, but ensure we see the full output node
+            const int desiredX = maxScroll;
             safeViewport->setViewPosition(desiredX, 0);
+
+            std::cout << "[MainComponent] Positioned for fixed output: contentWidth="
+                      << safeGraph->contentWidth() << " viewWidth=" << safeViewport->getViewWidth()
+                      << " scrollX=" << desiredX << std::endl;
         });
     } else {
         graphViewport_.setViewPosition(0, 0);
@@ -692,10 +756,33 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
 }
 
 void MainComponent::switchToMacroView() {
-    currentMicro_.reset();
     std::cout << "[MainComponent] switchToMacroView" << std::endl;
+
+    // Save current micro view's viewport position and zoom BEFORE clearing currentMicro_
+    if (currentMicro_) {
+        const auto currentZoom = graphComponent_.getZoom();
+        const auto currentPos = graphViewport_.getViewPosition();
+        std::cout << "[MainComponent] Saving micro view '" << currentMicro_->id
+                  << "' state before macro: pos=(" << currentPos.x << "," << currentPos.y
+                  << ") zoom=" << currentZoom
+                  << " contentSize=(" << graphComponent_.contentWidth() << "," << graphComponent_.contentHeight() << ")"
+                  << std::endl;
+        savedViewportStates_[currentMicro_->id] = ViewportState{currentPos, currentZoom};
+    }
+
+    currentMicro_.reset();
     breadcrumbStack_.clear();
-    graphComponent_.setGraphView(&app_.nodeGraphView());
+
+    // Apply position overrides from saved macro layout to prevent layout algorithm from moving nodes
+    auto& macroView = app_.nodeGraphView();
+    macroView.setPositionOverrides(buildOverrides(app_.macroLayout()));
+
+    // Re-set the topology to trigger layout recalculation with position overrides
+    if (const auto topology = app_.graphTopology()) {
+        macroView.setTopology(topology);
+    }
+
+    graphComponent_.setGraphView(&macroView);
     graphComponent_.setNodeDragHandler([this](const std::string& nodeId, float normX, float normY) {
         app_.updateMacroNodePosition(nodeId, normX, normY);
     });
@@ -704,17 +791,17 @@ void MainComponent::switchToMacroView() {
     });
     graphComponent_.setConnectNodesHandler([this](const std::string& fromId, const std::string& toId) {
         if (app_.connectNodes(fromId, toId)) {
-            switchToMacroView();
+            refreshCurrentView();
         }
     });
     graphComponent_.setDisconnectNodesHandler([this](const std::string& fromId, const std::string& toId) {
         if (app_.disconnectNodes(fromId, toId)) {
-            switchToMacroView();
+            refreshCurrentView();
         }
     });
     graphComponent_.setPortConnectHandler([this](const std::string& fromId, std::size_t, const std::string& toId, std::size_t) {
         if (app_.connectNodes(fromId, toId)) {
-            switchToMacroView();
+            refreshCurrentView();
         }
     });
     graphComponent_.setNodeCreateHandler([this](const NodeGraphComponent::NodeCreateRequest& request) {
@@ -724,26 +811,73 @@ void MainComponent::switchToMacroView() {
         }
 
         if (app_.createNode(*templateType, request.normX, request.normY, request.insertBetween)) {
-            switchToMacroView();
+            refreshCurrentView();
         }
     });
     graphComponent_.setNodeSwapHandler([this](const std::string& first, const std::string& second) {
         if (app_.swapMacroNodes(first, second)) {
-            switchToMacroView();
+            refreshCurrentView();
         }
     });
     graphComponent_.setNodeInsertHandler([this](const std::string& insertNode, const std::pair<std::string, std::string>& connection) {
         if (app_.insertNodeIntoConnection(insertNode, connection)) {
-            switchToMacroView();
+            refreshCurrentView();
         }
     });
     graphComponent_.setFixedEndpoints(std::nullopt, std::nullopt);
-    graphViewport_.setViewPosition(0, 0);
+
+    // Restore saved macro viewport position and zoom, or use default (0, 0) and 1.0x
+    const auto savedStateIt = savedViewportStates_.find("__macro__");
+    juce::Component::SafePointer<juce::Viewport> safeViewport(&graphViewport_);
+    juce::Component::SafePointer<NodeGraphComponent> safeGraph(&graphComponent_);
+
+    if (savedStateIt != savedViewportStates_.end()) {
+        const auto savedPos = savedStateIt->second.position;
+        const auto savedZoom = savedStateIt->second.zoom;
+        std::cout << "[MainComponent] Restoring macro state: pos=("
+                  << savedPos.x << "," << savedPos.y
+                  << ") zoom=" << savedZoom << std::endl;
+
+        juce::MessageManager::callAsync([safeViewport, safeGraph, savedPos, savedZoom]() mutable {
+            if (safeViewport == nullptr || safeGraph == nullptr) {
+                return;
+            }
+            safeGraph->setZoom(savedZoom);
+            safeViewport->setViewPosition(savedPos);
+
+            // Log what actually happened after setting
+            const auto actualPos = safeViewport->getViewPosition();
+            const auto actualZoom = safeGraph->getZoom();
+            std::cout << "[MainComponent] Applied macro state: requested pos=("
+                      << savedPos.x << "," << savedPos.y
+                      << ") zoom=" << savedZoom
+                      << " | actual pos=(" << actualPos.x << "," << actualPos.y
+                      << ") zoom=" << actualZoom
+                      << " contentSize=(" << safeGraph->contentWidth() << "," << safeGraph->contentHeight() << ")"
+                      << std::endl;
+        });
+    } else {
+        std::cout << "[MainComponent] No saved macro state, using defaults" << std::endl;
+        juce::MessageManager::callAsync([safeViewport, safeGraph]() mutable {
+            if (safeViewport == nullptr || safeGraph == nullptr) {
+                return;
+            }
+            safeViewport->setViewPosition(0, 0);
+            safeGraph->setZoom(1.0F);
+        });
+    }
+
     nodeLibrary_.setTheme(app_.nodeGraphView().theme());
     updateBreadcrumbs();
     selectedNode_.reset();
     graphComponent_.grabKeyboardFocus();
     refreshSetupPanel();
+}
+
+void MainComponent::refreshCurrentView() {
+    // Refresh the graph component without switching views or resetting viewport
+    graphComponent_.repaint();
+    nodeLibrary_.setTheme(app_.nodeGraphView().theme());
 }
 
 void MainComponent::updateBreadcrumbs() {
@@ -768,18 +902,11 @@ void MainComponent::navigateToBreadcrumbIndex(int index) {
 
     const auto clampedIndex = std::min(index, static_cast<int>(breadcrumbStack_.size()));
 
-    std::vector<std::pair<std::string, std::string>> path;
-    path.reserve(static_cast<std::size_t>(clampedIndex));
-    for (int i = 0; i < clampedIndex; ++i) {
-        path.emplace_back(breadcrumbStack_[static_cast<std::size_t>(i)]);
-    }
-
-    switchToMacroView();
-
-    for (const auto& entry : path) {
-        auto descriptor = app_.microViewDescriptor(entry.first);
-        switchToMicroView(entry.first, entry.second, descriptor);
-    }
+    // Directly navigate to the target micro view without going through macro
+    // This prevents overwriting the saved macro state during intermediate navigation
+    const auto& targetEntry = breadcrumbStack_[static_cast<std::size_t>(clampedIndex - 1)];
+    auto descriptor = app_.microViewDescriptor(targetEntry.first);
+    switchToMicroView(targetEntry.first, targetEntry.second, descriptor);
 }
 
 void MainComponent::refreshBreadcrumbBar() {

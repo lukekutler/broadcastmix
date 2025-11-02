@@ -581,6 +581,13 @@ void NodeGraphComponent::mouseDown(const juce::MouseEvent& event) {
             if (onSelectionChanged_) {
                 onSelectionChanged_(selectedNodeId_);
             }
+
+            // Start panning when clicking on blank space
+            if (viewport_ != nullptr) {
+                isPanning_ = true;
+                panStartViewportPos_ = viewport_->getViewPosition();
+                panStartMousePos_ = event.getScreenPosition();
+            }
         }
     }
 
@@ -598,9 +605,20 @@ void NodeGraphComponent::mouseDrag(const juce::MouseEvent& event) {
         return;
     }
 
+    // Handle panning when dragging blank space
+    if (isPanning_ && viewport_ != nullptr) {
+        const auto currentMousePos = event.getScreenPosition();
+        const auto delta = panStartMousePos_ - currentMousePos;
+        viewport_->setViewPosition(panStartViewportPos_.x + delta.x, panStartViewportPos_.y + delta.y);
+        return;
+    }
+
     if (!draggingNodeId_ || view_ == nullptr) {
         return;
     }
+
+    // Perform auto-scroll when dragging near viewport edges
+    performAutoScroll(event.position);
 
     refreshDropTargets();
 
@@ -685,6 +703,7 @@ void NodeGraphComponent::mouseUp(const juce::MouseEvent& event) {
     pendingDropConnection_.reset();
     swapTargetId_.reset();
     draggingNodeId_.reset();
+    isPanning_ = false;
 }
 
 void NodeGraphComponent::mouseDoubleClick(const juce::MouseEvent& event) {
@@ -744,6 +763,55 @@ bool NodeGraphComponent::keyPressed(const juce::KeyPress& key) {
         return true;
     }
     return false;
+}
+
+void NodeGraphComponent::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) {
+    if (viewport_ == nullptr) {
+        return;
+    }
+
+    // Calculate scroll delta based on wheel movement
+    // Higher multiplier for faster trackpad scrolling
+    constexpr float kScrollMultiplier = 200.0F;
+    const int deltaX = static_cast<int>(-wheel.deltaX * kScrollMultiplier);
+    const int deltaY = static_cast<int>(-wheel.deltaY * kScrollMultiplier);
+
+    // Get current viewport position
+    auto currentPos = viewport_->getViewPosition();
+
+    // Apply the delta
+    currentPos.x += deltaX;
+    currentPos.y += deltaY;
+
+    // Set the new viewport position
+    viewport_->setViewPosition(currentPos);
+
+    // Suppress default behavior
+    event.source.enableUnboundedMouseMovement(false);
+}
+
+void NodeGraphComponent::mouseMagnify(const juce::MouseEvent& event, float scaleFactor) {
+    // Handle trackpad pinch-to-zoom gesture
+    constexpr float kMinZoom = 0.5F;
+    constexpr float kMaxZoom = 3.0F;
+
+    // Apply scale factor to current zoom level
+    const float newZoom = juce::jlimit(kMinZoom, kMaxZoom, zoomLevel_ * scaleFactor);
+
+    if (std::abs(newZoom - zoomLevel_) > 0.001F) {
+        // Get mouse position in component coordinates before zoom
+        const auto mousePos = event.position;
+
+        // Update zoom level
+        zoomLevel_ = newZoom;
+
+        // Apply transform for zoom
+        setTransform(juce::AffineTransform::scale(zoomLevel_));
+
+        // Force refresh of cached positions
+        refreshCachedPositions(true);
+        repaint();
+    }
 }
 
 void NodeGraphComponent::refreshDropTargets() {
@@ -831,6 +899,46 @@ void NodeGraphComponent::refreshDropTargets() {
         const auto fromPoint = portPosition(PortSelection { connection.fromId, true, connection.fromPort });
         const auto toPoint = portPosition(PortSelection { connection.toId, false, connection.toPort });
         connectionSegments_.push_back(ConnectionSegment { connection.fromId, connection.toId, juce::Line<float>(fromPoint, toPoint) });
+    }
+}
+
+void NodeGraphComponent::performAutoScroll(const juce::Point<float>& mousePosition) {
+    if (viewport_ == nullptr) {
+        return;
+    }
+
+    // Define auto-scroll edge zone (pixels from edge)
+    constexpr int kAutoScrollZone = 50;
+    constexpr int kAutoScrollSpeed = 15;
+
+    // Get viewport bounds relative to this component
+    const auto viewportBounds = getLocalBounds();
+    const auto viewPos = viewport_->getViewPosition();
+
+    int scrollDeltaX = 0;
+    int scrollDeltaY = 0;
+
+    // Check if mouse is near left edge
+    if (mousePosition.x < kAutoScrollZone) {
+        scrollDeltaX = -kAutoScrollSpeed;
+    }
+    // Check if mouse is near right edge
+    else if (mousePosition.x > viewportBounds.getWidth() - kAutoScrollZone) {
+        scrollDeltaX = kAutoScrollSpeed;
+    }
+
+    // Check if mouse is near top edge
+    if (mousePosition.y < kAutoScrollZone) {
+        scrollDeltaY = -kAutoScrollSpeed;
+    }
+    // Check if mouse is near bottom edge
+    else if (mousePosition.y > viewportBounds.getHeight() - kAutoScrollZone) {
+        scrollDeltaY = kAutoScrollSpeed;
+    }
+
+    // Apply auto-scroll if needed
+    if (scrollDeltaX != 0 || scrollDeltaY != 0) {
+        viewport_->setViewPosition(viewPos.x + scrollDeltaX, viewPos.y + scrollDeltaY);
     }
 }
 
@@ -982,7 +1090,8 @@ void NodeGraphComponent::setGraphView(ui::NodeGraphView* view) {
     fixedOutputAnchor_.reset();
     fixedInputNormY_.reset();
     fixedOutputNormY_.reset();
-    resolveFixedEndpoints();
+    fixedInputEnabled_ = false;
+    fixedOutputEnabled_ = false;
     refreshCachedPositions(true);
     if (onSelectionChanged_) {
         onSelectionChanged_(selectedNodeId_);
@@ -1120,9 +1229,16 @@ juce::Colour NodeGraphComponent::nodeFillColour(audio::GraphNodeType type) const
 }
 
 void NodeGraphComponent::refreshCachedPositions(bool force) {
+    // Prevent recursive calls that could cause infinite loops
+    if (isRefreshingPositions_) {
+        return;
+    }
+    isRefreshingPositions_ = true;
+
     auto bounds = getLocalBounds();
 
     if (view_ == nullptr) {
+        isRefreshingPositions_ = false;
         layoutArea_ = computeLayoutArea();
         cachedPositions_.clear();
         cachedPositionsVersion_ = std::numeric_limits<std::size_t>::max();
@@ -1171,11 +1287,19 @@ void NodeGraphComponent::refreshCachedPositions(bool force) {
     normSpanX_ = std::max(0.001F, paddedMaxX - paddedMinX);
     normSpanY_ = std::max(0.001F, paddedMaxY - paddedMinY);
 
-    const int derivedWidth = static_cast<int>(std::ceil(normSpanX_ * kNodeWidth + (normSpanX_ + 1.0F) * kHorizontalPadding));
-    const int derivedHeight = static_cast<int>(std::ceil(normSpanY_ * kNodeHeight + (normSpanY_ + 1.0F) * kVerticalPadding));
+    // Calculate canvas size based on normalized coordinate range
+    // Each normalized unit gets 600 pixels of space (enough for ~4 nodes horizontally)
+    constexpr float kPixelsPerNormUnit = 600.0F;
+    const int derivedWidth = static_cast<int>(std::ceil(normSpanX_ * kPixelsPerNormUnit));
+    const int derivedHeight = static_cast<int>(std::ceil(normSpanY_ * kPixelsPerNormUnit));
 
-    const int contentWidth = std::max(bounds.getWidth(), derivedWidth);
-    const int contentHeight = std::max(bounds.getHeight(), derivedHeight);
+    // Reasonable minimum canvas sizes for scrolling
+    constexpr int kMinCanvasWidth = 2400;
+    constexpr int kMinCanvasHeight = 1600;
+
+    // Canvas must be at least as large as viewport, and large enough for scrolling
+    const int contentWidth = std::max({bounds.getWidth(), derivedWidth, kMinCanvasWidth});
+    const int contentHeight = std::max({bounds.getHeight(), derivedHeight, kMinCanvasHeight});
 
     if (contentWidth != getWidth() || contentHeight != getHeight()) {
         lastContentWidth_ = contentWidth;
@@ -1190,6 +1314,7 @@ void NodeGraphComponent::refreshCachedPositions(bool force) {
     const auto layoutVersion = view_->layoutVersion();
     const bool sizeChanged = bounds.getWidth() != lastWidth_ || bounds.getHeight() != lastHeight_;
     if (!force && !sizeChanged && layoutVersion == cachedPositionsVersion_) {
+        isRefreshingPositions_ = false;
         return;
     }
 
@@ -1209,6 +1334,8 @@ void NodeGraphComponent::refreshCachedPositions(bool force) {
         const auto centerY = layoutArea_.getY() + juce::jlimit(0.0F, 1.0F, normalizedY) * layoutArea_.getHeight();
         cachedPositions_.emplace(node.id, juce::Point<float>(centerX, centerY));
     }
+
+    isRefreshingPositions_ = false;
 }
 
 juce::Rectangle<float> NodeGraphComponent::computeLayoutArea() const {
@@ -1434,6 +1561,39 @@ void NodeGraphComponent::beginNodeRename(const std::string& nodeId) {
     refreshCachedPositions();
     if (const auto bounds = labelBoundsForNode(nodeId)) {
         beginInlineRename(nodeId, bounds->toNearestInt());
+    }
+}
+
+void NodeGraphComponent::setViewport(juce::Viewport* viewport) {
+    viewport_ = viewport;
+}
+
+void NodeGraphComponent::resetZoom() {
+    if (std::abs(zoomLevel_ - 1.0F) > 0.001F) {
+        zoomLevel_ = 1.0F;
+        setTransform(juce::AffineTransform());
+        refreshCachedPositions(true);
+        repaint();
+    }
+}
+
+void NodeGraphComponent::setZoom(float zoom) {
+    constexpr float kMinZoom = 0.5F;
+    constexpr float kMaxZoom = 3.0F;
+    const float clampedZoom = juce::jlimit(kMinZoom, kMaxZoom, zoom);
+
+    juce::Logger::writeToLog("setZoom called: requested=" + juce::String(zoom) +
+                             " clamped=" + juce::String(clampedZoom) +
+                             " current=" + juce::String(zoomLevel_));
+
+    if (std::abs(zoomLevel_ - clampedZoom) > 0.001F) {
+        zoomLevel_ = clampedZoom;
+        setTransform(juce::AffineTransform::scale(zoomLevel_));
+        refreshCachedPositions(true);
+        repaint();
+        juce::Logger::writeToLog("Zoom applied: " + juce::String(zoomLevel_));
+    } else {
+        juce::Logger::writeToLog("Zoom not changed (too small difference)");
     }
 }
 

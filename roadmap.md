@@ -48,6 +48,18 @@
 - 2025-10-06: AudioProcessorGraph bridge created for spec'd Broadcast → Mix topology with -3 dB trim node.
 - 2025-10-06: `.broadcastmix` persistence (graph, snapshot index, autosave metadata) implemented with sample bundle.
 
+## Current Work Items (as of 2025-11-01)
+From commit 1225e8e - working node flow with many fixes implemented:
+
+### Priority Next Steps
+- [ ] **Window scrolling management** - Improve canvas scrolling and viewport navigation
+- [ ] **UI lagginess with tons of nodes** - Performance optimization for large node graphs
+- [ ] **Group I/O routing** - Allow a group input to pass that input to what's inside the group and then back out
+- [ ] **Channel & output I/O selection** - Improve channel routing and output selection UI/logic
+- [ ] **Better preset management** - Enhanced preset save/load/organization system
+- [ ] **Project saving** - Complete project persistence before working towards plugin instantiation
+
 ## Session Log
+- 2025-11-01: Working on window scrolling management and documenting current roadmap items
 - 2025-10-06 (Evening Pause): Paused after wiring persistence; next session should tackle Phase 0 to-do items above (logging sink, JUCE UI surfacing, snapshot payload details, autosave UX).
 - Earlier milestones are listed chronologically above.
