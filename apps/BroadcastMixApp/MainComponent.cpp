@@ -692,9 +692,11 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
     // Restore saved viewport position and zoom for this micro view, or use default
     const auto savedStateIt = savedViewportStates_.find(effectiveNodeId);
     const bool hasSavedState = (savedStateIt != savedViewportStates_.end());
+    const bool hasFixedInput = fixedInput.has_value();
+    const bool hasFixedOutput = fixedOutput.has_value();
 
     std::cout << "[MainComponent] Viewport restore: hasSavedState=" << hasSavedState
-              << " fixedOutput=" << (fixedOutput.has_value() ? "YES" : "NO") << std::endl;
+              << " fixedOutput=" << (hasFixedOutput ? "YES" : "NO") << std::endl;
 
     if (hasSavedState) {
         // Restore viewport state asynchronously after layout is complete
@@ -724,29 +726,35 @@ void MainComponent::switchToMicroView(const std::string& nodeId,
                       << " contentSize=(" << safeGraph->contentWidth() << "," << safeGraph->contentHeight() << ")"
                       << std::endl;
         });
-    } else if (fixedOutput) {
-        std::cout << "[MainComponent] No saved state, positioning for fixed output" << std::endl;
-        // For views with fixed output, scroll to show the right side (where output is)
-        // Position the output comfortably visible from the right edge of viewport
-        juce::Component::SafePointer<juce::Viewport> safeViewport(&graphViewport_);
+    } else {
+        std::vector<std::string> terminalIds;
+        NodeGraphComponent::FocusAlignment alignment = NodeGraphComponent::FocusAlignment::Center;
+
+        if (hasFixedInput && hasFixedOutput) {
+            terminalIds.push_back(*fixedInput);
+            terminalIds.push_back(*fixedOutput);
+            alignment = NodeGraphComponent::FocusAlignment::Center;
+            std::cout << "[MainComponent] No saved state, focusing on input/output terminals" << std::endl;
+        } else if (hasFixedOutput) {
+            terminalIds.push_back(*fixedOutput);
+            alignment = NodeGraphComponent::FocusAlignment::Right;
+            std::cout << "[MainComponent] No saved state, focusing on output terminal" << std::endl;
+        } else if (hasFixedInput) {
+            terminalIds.push_back(*fixedInput);
+            alignment = NodeGraphComponent::FocusAlignment::Center;
+            std::cout << "[MainComponent] No saved state, focusing on input terminal" << std::endl;
+        } else {
+            std::cout << "[MainComponent] No saved state, focusing on available nodes" << std::endl;
+        }
+
         juce::Component::SafePointer<NodeGraphComponent> safeGraph(&graphComponent_);
-        juce::MessageManager::callAsync([safeViewport, safeGraph]() mutable {
-            if (safeViewport == nullptr || safeGraph == nullptr) {
+        juce::MessageManager::callAsync([safeGraph, terminalIds = std::move(terminalIds), alignment]() mutable {
+            if (safeGraph == nullptr) {
                 return;
             }
-            // Scroll so output is visible with padding from right edge
-            // We want to show everything from some point to the right edge
-            const int maxScroll = std::max(0, safeGraph->contentWidth() - safeViewport->getViewWidth());
-            // Scroll almost all the way right, but ensure we see the full output node
-            const int desiredX = maxScroll;
-            safeViewport->setViewPosition(desiredX, 0);
-
-            std::cout << "[MainComponent] Positioned for fixed output: contentWidth="
-                      << safeGraph->contentWidth() << " viewWidth=" << safeViewport->getViewWidth()
-                      << " scrollX=" << desiredX << std::endl;
+            safeGraph->setZoom(1.0F);
+            safeGraph->focusNodes(terminalIds, alignment, true);
         });
-    } else {
-        graphViewport_.setViewPosition(0, 0);
     }
 
     updateBreadcrumbs();

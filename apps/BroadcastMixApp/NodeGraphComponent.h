@@ -61,6 +61,16 @@ public:
     void setZoom(float zoom);
     [[nodiscard]] float getZoom() const noexcept { return zoomLevel_; }
 
+    enum class FocusAlignment {
+        Center,
+        Right
+    };
+
+    void focusNodes(const std::vector<std::string>& nodeIds,
+                    FocusAlignment alignment,
+                    bool fitToViewport = true,
+                    int retryCount = 0);
+
 private:
     struct PortSelection {
         std::string nodeId;

@@ -24,6 +24,14 @@ constexpr float kConnectionDropTolerance = 12.0F;
 constexpr float kNormPadding = 0.1F;
 constexpr float kNormMin = -0.25F;
 constexpr float kNormMax = 2.0F;
+constexpr int kMinMacroCanvasWidth = 2400;
+constexpr int kMinMacroCanvasHeight = 1600;
+constexpr int kMinMicroCanvasWidth = 1200;
+constexpr int kMinMicroCanvasHeight = 900;
+constexpr float kMicroNormMin = -0.05F;
+constexpr float kMicroNormMax = 1.05F;
+constexpr float kMicroNormMinY = 0.0F;
+constexpr float kMicroNormMaxY = 1.0F;
 
 std::string initialsFromName(const std::string& name) {
     std::string initials;
@@ -1253,6 +1261,8 @@ void NodeGraphComponent::refreshCachedPositions(bool force) {
         return;
     }
 
+    const bool useMicroCanvas = fixedInputEnabled_ || fixedOutputEnabled_;
+
     float minNormX = std::numeric_limits<float>::max();
     float maxNormX = std::numeric_limits<float>::lowest();
     float minNormY = std::numeric_limits<float>::max();
@@ -1266,10 +1276,17 @@ void NodeGraphComponent::refreshCachedPositions(bool force) {
     }
 
     if (!view_->nodes().empty()) {
-        minNormX = std::min(minNormX, kNormMin);
-        maxNormX = std::max(maxNormX, kNormMax - 0.25F);
-        minNormY = std::min(minNormY, kNormMin);
-        maxNormY = std::max(maxNormY, kNormMax - 0.25F);
+        if (useMicroCanvas) {
+            minNormX = std::min(minNormX, kMicroNormMin);
+            maxNormX = std::max(maxNormX, kMicroNormMax);
+            minNormY = std::min(minNormY, kMicroNormMinY);
+            maxNormY = std::max(maxNormY, kMicroNormMaxY);
+        } else {
+            minNormX = std::min(minNormX, kNormMin);
+            maxNormX = std::max(maxNormX, kNormMax - 0.25F);
+            minNormY = std::min(minNormY, kNormMin);
+            maxNormY = std::max(maxNormY, kNormMax - 0.25F);
+        }
     } else {
         minNormX = 0.0F;
         maxNormX = 1.0F;
@@ -1293,13 +1310,12 @@ void NodeGraphComponent::refreshCachedPositions(bool force) {
     const int derivedWidth = static_cast<int>(std::ceil(normSpanX_ * kPixelsPerNormUnit));
     const int derivedHeight = static_cast<int>(std::ceil(normSpanY_ * kPixelsPerNormUnit));
 
-    // Reasonable minimum canvas sizes for scrolling
-    constexpr int kMinCanvasWidth = 2400;
-    constexpr int kMinCanvasHeight = 1600;
+    const int minCanvasWidth = useMicroCanvas ? kMinMicroCanvasWidth : kMinMacroCanvasWidth;
+    const int minCanvasHeight = useMicroCanvas ? kMinMicroCanvasHeight : kMinMacroCanvasHeight;
 
     // Canvas must be at least as large as viewport, and large enough for scrolling
-    const int contentWidth = std::max({bounds.getWidth(), derivedWidth, kMinCanvasWidth});
-    const int contentHeight = std::max({bounds.getHeight(), derivedHeight, kMinCanvasHeight});
+    const int contentWidth = std::max({bounds.getWidth(), derivedWidth, minCanvasWidth});
+    const int contentHeight = std::max({bounds.getHeight(), derivedHeight, minCanvasHeight});
 
     if (contentWidth != getWidth() || contentHeight != getHeight()) {
         lastContentWidth_ = contentWidth;
@@ -1595,6 +1611,110 @@ void NodeGraphComponent::setZoom(float zoom) {
     } else {
         juce::Logger::writeToLog("Zoom not changed (too small difference)");
     }
+}
+
+void NodeGraphComponent::focusNodes(const std::vector<std::string>& nodeIds,
+                                    FocusAlignment alignment,
+                                    bool fitToViewport,
+                                    int retryCount) {
+    if (viewport_ == nullptr) {
+        juce::Logger::writeToLog("focusNodes aborted: viewport null");
+        return;
+    }
+
+    refreshCachedPositions(true);
+
+    juce::Rectangle<float> targetBounds;
+    bool hasBounds = false;
+
+    const auto accumulateNode = [&](const std::string& nodeId) {
+        const auto posIt = cachedPositions_.find(nodeId);
+        if (posIt == cachedPositions_.end()) {
+            return;
+        }
+        const auto bounds = nodeBoundsForPosition(posIt->second);
+        if (!hasBounds) {
+            targetBounds = bounds;
+            hasBounds = true;
+        } else {
+            targetBounds = targetBounds.getUnion(bounds);
+        }
+    };
+
+    if (!nodeIds.empty()) {
+        for (const auto& id : nodeIds) {
+            accumulateNode(id);
+        }
+    }
+
+    if (!hasBounds) {
+        for (const auto& entry : cachedPositions_) {
+            accumulateNode(entry.first);
+        }
+    }
+
+    if (!hasBounds) {
+        juce::Logger::writeToLog("focusNodes aborted: no node bounds");
+        return;
+    }
+
+    targetBounds.expand(40.0F, 40.0F);
+
+    const int viewWidth = viewport_->getViewWidth();
+    const int viewHeight = viewport_->getViewHeight();
+    if (viewWidth <= 0 || viewHeight <= 0) {
+        juce::Logger::writeToLog("focusNodes aborted: viewport dimensions invalid");
+        if (retryCount < 5) {
+            juce::Component::SafePointer<NodeGraphComponent> safeThis(this);
+            auto retryIds = nodeIds;
+            juce::MessageManager::callAsync([safeThis, ids = std::move(retryIds), alignment, fitToViewport, retryCount]() mutable {
+                if (safeThis == nullptr) {
+                    return;
+                }
+                safeThis->focusNodes(ids, alignment, fitToViewport, retryCount + 1);
+            });
+        }
+        return;
+    }
+
+    const float currentZoom = zoomLevel_;
+    float targetZoom = currentZoom;
+
+    if (fitToViewport) {
+        const float widthZoom = targetBounds.getWidth() > 0.0F
+            ? static_cast<float>(viewWidth) / targetBounds.getWidth()
+            : targetZoom;
+        const float heightZoom = targetBounds.getHeight() > 0.0F
+            ? static_cast<float>(viewHeight) / targetBounds.getHeight()
+            : targetZoom;
+        const float desired = 0.92F * std::min(widthZoom, heightZoom);
+        targetZoom = juce::jlimit(0.4F, 1.0F, desired);
+    }
+
+    if (std::abs(targetZoom - currentZoom) > 0.001F) {
+        setZoom(targetZoom);
+    }
+
+    const float appliedZoom = zoomLevel_;
+    const float effectiveViewWidth = static_cast<float>(viewWidth) / appliedZoom;
+    const float effectiveViewHeight = static_cast<float>(viewHeight) / appliedZoom;
+
+    float targetX = 0.0F;
+    if (alignment == FocusAlignment::Right) {
+        targetX = targetBounds.getRight() - (effectiveViewWidth - 60.0F);
+    } else {
+        targetX = targetBounds.getCentreX() - (effectiveViewWidth * 0.5F);
+    }
+
+    float targetY = targetBounds.getCentreY() - (effectiveViewHeight * 0.5F);
+
+    const int maxScrollX = std::max(0, contentWidth() - viewWidth);
+    const int maxScrollY = std::max(0, contentHeight() - viewHeight);
+
+    const int clampedX = juce::jlimit(0, maxScrollX, static_cast<int>(std::round(targetX)));
+    const int clampedY = juce::jlimit(0, maxScrollY, static_cast<int>(std::round(targetY)));
+
+    viewport_->setViewPosition(clampedX, clampedY);
 }
 
 void NodeGraphComponent::textEditorReturnKeyPressed(juce::TextEditor& editor) {
